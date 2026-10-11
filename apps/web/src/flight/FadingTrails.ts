@@ -13,9 +13,7 @@ interface FadingTrailsOptions {
 }
 
 // Up to `maxTrails` independent screen-space-width polylines, drawn in one call. Each trail
-// occupies a fixed slot and fades from opaque at its newest point to transparent at its oldest.
-// A trail of `maxPoints` points reaches full transparency at its first point; shorter trails
-// fade proportionally less.
+// occupies a fixed slot, and its opacity is interpolated between per-point fades.
 export class FadingTrails extends THREE.Mesh<THREE.InstancedBufferGeometry, THREE.ShaderMaterial> {
   private readonly maxTrails: number;
   private readonly maxPoints: number;
@@ -72,25 +70,28 @@ export class FadingTrails extends THREE.Mesh<THREE.InstancedBufferGeometry, THRE
     geometry.instanceCount = maxTrails * segmentsPerTrail;
   }
 
-  // Replaces the trail in `slot` with `points`, ordered oldest first. Throws if `slot` is out of
-  // range or there are more than `maxPoints` points.
-  setTrail(slot: number, points: THREE.Vector3[]) {
+  // Replaces the trail in `slot` with `points`, whose opacities are `fades` in [0, 1]. A segment
+  // whose ends both have zero fade is not drawn. Throws if `slot` is out of range, there are more
+  // than `maxPoints` points, or `fades` is a different length.
+  setTrail(slot: number, points: THREE.Vector3[], fades: number[]) {
     if (!Number.isInteger(slot) || slot < 0 || slot >= this.maxTrails) {
       throw new Error(`FadingTrails slot must be an integer in [0, ${this.maxTrails}), got ${slot}`);
     }
     if (points.length > this.maxPoints) {
       throw new Error(`FadingTrails holds at most ${this.maxPoints} points per trail, got ${points.length}`);
     }
+    if (fades.length !== points.length) {
+      throw new Error(`FadingTrails needs one fade per point, got ${fades.length} for ${points.length} points`);
+    }
 
     const first = slot * this.segmentsPerTrail;
-    const fade = (index: number) => 1 - (points.length - 1 - index) / (this.maxPoints - 1);
     for (let i = 0; i < this.segmentsPerTrail; i++) {
       const segment = first + i;
       if (i < points.length - 1) {
         this.segmentStarts.setXYZ(segment, points[i].x, points[i].y, points[i].z);
         this.segmentEnds.setXYZ(segment, points[i + 1].x, points[i + 1].y, points[i + 1].z);
-        this.fadeStarts.setX(segment, fade(i));
-        this.fadeEnds.setX(segment, fade(i + 1));
+        this.fadeStarts.setX(segment, fades[i]);
+        this.fadeEnds.setX(segment, fades[i + 1]);
       } else {
         this.fadeStarts.setX(segment, 0);
         this.fadeEnds.setX(segment, 0);
@@ -103,7 +104,7 @@ export class FadingTrails extends THREE.Mesh<THREE.InstancedBufferGeometry, THRE
   }
 
   clearTrail(slot: number) {
-    this.setTrail(slot, []);
+    this.setTrail(slot, [], []);
   }
 
   setResolution(width: number, height: number) {

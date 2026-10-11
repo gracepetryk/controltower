@@ -4,23 +4,30 @@ import { SearchBox } from '@mapbox/search-js-react'
 
 import 'mapbox-gl/dist/mapbox-gl.css'
 import './App.css'
+import { AircraftFeed } from './flight/AircraftFeed'
 import { AircraftLayer } from './flight/AircraftLayer'
-import { orbitPosition } from './flight/simulatedFlight'
+import type { BoundingBox } from './flight/aircraftApi'
 
 const accessToken = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN
 const center:[number, number] = [-122.30880, 47.45020]
 const MAX_AIRCRAFT = 1000
+const TRAIL_MS = 60_000
+// Smoothed trails are split into as many points as fit.
+const MAX_TRAIL_POINTS = 256
 
-const simulatedOrbit = {
-  center,
-  radiusMeters: 30000,
-  lapMs: 10_000,
-  altitudeMeters: 10000,
-  altitudeSwingMeters: 300,
+// The map's visible area, with longitudes wrapped into [-180, 180].
+function visibleBounds(map: mapboxgl.Map): BoundingBox {
+  const bounds = map.getBounds()!
+  if (bounds.getEast() - bounds.getWest() >= 360) {
+    return [-180, bounds.getSouth(), 180, bounds.getNorth()]
+  }
+  const wrap = (lng: number) => ((((lng + 180) % 360) + 360) % 360) - 180
+  return [wrap(bounds.getWest()), bounds.getSouth(), wrap(bounds.getEast()), bounds.getNorth()]
 }
 
 function App() {
-  const mapRef = useRef<mapboxgl.Map | null>(null)
+  // Set once the map has loaded, to show the search box.
+  const [map, setMap] = useState<mapboxgl.Map | null>(null)
   const mapContainerRef = useRef<HTMLDivElement>(null)
   const [inputValue, setInputValue] = useState('')
 
@@ -33,18 +40,34 @@ function App() {
       zoom: 13,
       pitch: 60,
     })
-    mapRef.current = map
 
-    const aircraftLayer = new AircraftLayer('aircraft', { origin: center, maxAircraft: MAX_AIRCRAFT })
-    map.on('load', () => map.addLayer(aircraftLayer))
+    const aircraftLayer = new AircraftLayer('aircraft', {
+      origin: center,
+      maxAircraft: MAX_AIRCRAFT,
+      maxTrailPoints: MAX_TRAIL_POINTS,
+    })
+    map.on('load', () => {
+      map.addLayer(aircraftLayer)
+      setMap(map)
+    })
 
-    let frame = requestAnimationFrame(function tick(now) {
-      aircraftLayer.setAircraft('simulated', orbitPosition(simulatedOrbit, now))
+    const feed = new AircraftFeed({
+      trailMs: TRAIL_MS,
+      bounds: () => visibleBounds(map),
+      groundElevation: (lng, lat) => map.queryTerrainElevation([lng, lat]) ?? 0,
+    })
+    feed.start()
+
+    let frame = requestAnimationFrame(function tick() {
+      // Scheduled first so that an error drawing one frame doesn't stop the loop.
       frame = requestAnimationFrame(tick)
+      feed.draw(aircraftLayer)
     })
 
     return () => {
       cancelAnimationFrame(frame)
+      feed.stop()
+      setMap(null)
       map.remove()
     }
   }, [])
@@ -58,9 +81,9 @@ function App() {
             top: 0,
             position: 'absolute',
             zIndex: 10 }}>
-            {mapRef.current && <SearchBox 
+            {map && <SearchBox
                 accessToken={accessToken}
-                map={mapRef.current}
+                map={map}
                 mapboxgl={mapboxgl}
                 value={inputValue}
                 options={{

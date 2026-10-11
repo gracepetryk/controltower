@@ -10,8 +10,6 @@ import type { FlightPosition } from './types';
 
 // Planes are scaled up when zoomed out so they stay at least this long on screen.
 const MIN_PLANE_LENGTH_PIXELS = 16;
-const TRAIL_MIN_SPACING_METERS = 25;
-const MAX_TRAIL_POINTS = 100;
 const MAPBOX_TILE_SIZE = 512;
 const TRAIL_COLOR = '#ff8c1a';
 const DROP_LINE_COLOR = '#ffffff';
@@ -21,6 +19,8 @@ interface AircraftLayerOptions {
   // Aircraft positions are stored relative to this [lng, lat].
   origin: [number, number];
   maxAircraft: number;
+  // The most points in each trail, including the aircraft itself.
+  maxTrailPoints: number;
 }
 
 interface Aircraft {
@@ -30,58 +30,10 @@ interface Aircraft {
   // Scene units per meter at the aircraft's latitude.
   metersToScene: number;
   trailSlot: number;
-  trailPoints: THREE.Vector3[];
-  lastTrailHeadingDegrees: number;
 }
 
-// Unit vector in the scene frame pointing along a heading in degrees clockwise from north.
-function headingDirection(headingDegrees: number): THREE.Vector3 {
-  const heading = THREE.MathUtils.degToRad(headingDegrees);
-  return new THREE.Vector3(Math.sin(heading), Math.cos(heading), 0);
-}
-
-// A curve from `start` to `end` that leaves along `startHeadingDegrees` and arrives along
-// `endHeadingDegrees`. Its tangents scale with the horizontal distance, and altitude changes linearly.
-function trailCurve(
-  start: THREE.Vector3,
-  startHeadingDegrees: number,
-  end: THREE.Vector3,
-  endHeadingDegrees: number,
-): THREE.CubicBezierCurve3 {
-  const horizontalDistance = Math.hypot(end.x - start.x, end.y - start.y);
-  const climb = new THREE.Vector3(0, 0, end.z - start.z);
-  const tangent = (headingDegrees: number) =>
-    headingDirection(headingDegrees).multiplyScalar(horizontalDistance).add(climb).divideScalar(3);
-  return new THREE.CubicBezierCurve3(
-    start,
-    start.clone().add(tangent(startHeadingDegrees)),
-    end.clone().sub(tangent(endHeadingDegrees)),
-    end,
-  );
-}
-
-// Trail points after `start` and ending at `end`, about `spacing` apart along a curve that matches
-// the heading at both ends. Fills gaps, such as while the page is hidden and no frames run.
-// Returns at most MAX_TRAIL_POINTS points.
-function trailPointsBetween(
-  start: THREE.Vector3,
-  startHeadingDegrees: number,
-  end: THREE.Vector3,
-  endHeadingDegrees: number,
-  spacing: number,
-): THREE.Vector3[] {
-  const curve = trailCurve(start, startHeadingDegrees, end, endHeadingDegrees);
-  const divisions = Math.max(1, Math.floor(curve.getLength() / spacing));
-  const points: THREE.Vector3[] = [];
-  for (let i = Math.max(1, divisions - MAX_TRAIL_POINTS + 1); i < divisions; i++) {
-    points.push(curve.getPointAt(i / divisions));
-  }
-  points.push(end);
-  return points;
-}
-
-// Mapbox custom layer that renders any number of 3D planes, up to `maxAircraft`, each with a trail
-// through its previous positions and a faint vertical line down to the ground. All planes, trails
+// Mapbox custom layer that renders any number of 3D planes, up to `maxAircraft`, each with a fading
+// trail and a faint vertical line down to the ground. All planes, trails
 // and drop lines are each drawn in a single instanced draw call.
 export class AircraftLayer implements mapboxgl.CustomLayerInterface {
   readonly id: string;
@@ -107,13 +59,15 @@ export class AircraftLayer implements mapboxgl.CustomLayerInterface {
   private readonly dropLinePositions: Float32Array;
   private readonly aircraft = new Map<string, Aircraft>();
   private readonly freeTrailSlots: number[];
-  private readonly maxAircraft: number;
+  readonly maxAircraft: number;
+  readonly maxTrailPoints: number;
   private map: mapboxgl.Map | null = null;
   private renderer: THREE.WebGLRenderer | null = null;
 
-  constructor(id: string, { origin, maxAircraft }: AircraftLayerOptions) {
+  constructor(id: string, { origin, maxAircraft, maxTrailPoints }: AircraftLayerOptions) {
     this.id = id;
     this.maxAircraft = maxAircraft;
+    this.maxTrailPoints = maxTrailPoints;
     this.origin = mapboxgl.MercatorCoordinate.fromLngLat(origin);
     const metersToMercator = this.origin.meterInMercatorCoordinateUnits();
     // Mercator y grows southward, so north is flipped.
@@ -134,7 +88,7 @@ export class AircraftLayer implements mapboxgl.CustomLayerInterface {
       color: TRAIL_COLOR,
       linewidth: 2,
       maxTrails: maxAircraft,
-      maxPoints: MAX_TRAIL_POINTS,
+      maxPoints: maxTrailPoints,
     });
     // Popped from the end, so slots are handed out from 0.
     this.freeTrailSlots = Array.from({ length: maxAircraft }, (_, i) => maxAircraft - 1 - i);
@@ -150,9 +104,23 @@ export class AircraftLayer implements mapboxgl.CustomLayerInterface {
     this.scene.add(new THREE.AmbientLight(0xffffff, 1.5), sun, this.planes, this.trails, dropLines);
   }
 
-  // Adds the aircraft `id` at `position`, or moves it there and extends its trail. Throws if adding
-  // it would exceed `maxAircraft`.
-  setAircraft(id: string, position: FlightPosition) {
+  get aircraftCount(): number {
+    return this.aircraft.size;
+  }
+
+  hasAircraft(id: string): boolean {
+    return this.aircraft.has(id);
+  }
+
+  aircraftIds(): string[] {
+    return [...this.aircraft.keys()];
+  }
+
+  // Adds the aircraft `id` at `position`, or moves it there, and replaces its trail with
+  // `trailPoints`, oldest first, from `scenePoint`, each with an opacity in `trailFades`. The trail
+  // continues to the aircraft at full opacity. Throws if adding it would exceed `maxAircraft`, or if
+  // the trail has `maxTrailPoints` points or more.
+  setAircraft(id: string, position: FlightPosition, trailPoints: THREE.Vector3[], trailFades: number[]) {
     const { point, metersToScene } = this.toScene(position);
     let aircraft = this.aircraft.get(id);
     if (!aircraft) {
@@ -160,20 +128,13 @@ export class AircraftLayer implements mapboxgl.CustomLayerInterface {
       if (trailSlot === undefined) {
         throw new Error(`AircraftLayer holds at most ${this.maxAircraft} aircraft; cannot add ${id}`);
       }
-      aircraft = {
-        position,
-        point,
-        metersToScene,
-        trailSlot,
-        trailPoints: [],
-        lastTrailHeadingDegrees: position.headingDegrees,
-      };
+      aircraft = { position, point, metersToScene, trailSlot };
       this.aircraft.set(id, aircraft);
     }
     aircraft.position = position;
     aircraft.point = point;
     aircraft.metersToScene = metersToScene;
-    this.extendTrail(aircraft);
+    this.trails.setTrail(aircraft.trailSlot, [...trailPoints, point], [...trailFades, 1]);
 
     this.map?.triggerRepaint();
   }
@@ -249,27 +210,15 @@ export class AircraftLayer implements mapboxgl.CustomLayerInterface {
     (this.dropLineGeometry.attributes.instanceStart as THREE.InterleavedBufferAttribute).data.needsUpdate = true;
   }
 
-  // Appends points to the aircraft's trail once it has moved at least TRAIL_MIN_SPACING_METERS from
-  // the last trail point.
-  private extendTrail(aircraft: Aircraft) {
-    const { point, position, trailPoints } = aircraft;
-    const spacing = TRAIL_MIN_SPACING_METERS * aircraft.metersToScene;
-    const last = trailPoints.at(-1);
-    if (last && last.distanceTo(point) < spacing) {
-      return;
-    }
-
-    trailPoints.push(
-      ...(last
-        ? trailPointsBetween(last, aircraft.lastTrailHeadingDegrees, point, position.headingDegrees, spacing)
-        : [point]),
-    );
-    trailPoints.splice(0, trailPoints.length - MAX_TRAIL_POINTS);
-    aircraft.lastTrailHeadingDegrees = position.headingDegrees;
-    this.trails.setTrail(aircraft.trailSlot, trailPoints);
+  // The point in the scene frame at a position, for trails passed to `setAircraft`.
+  scenePoint(position: Pick<FlightPosition, 'lng' | 'lat' | 'altitudeMeters'>): THREE.Vector3 {
+    return this.toScene(position).point;
   }
 
-  private toScene({ lng, lat, altitudeMeters }: FlightPosition): { point: THREE.Vector3; metersToScene: number } {
+  private toScene({ lng, lat, altitudeMeters }: Pick<FlightPosition, 'lng' | 'lat' | 'altitudeMeters'>): {
+    point: THREE.Vector3;
+    metersToScene: number;
+  } {
     const coordinate = mapboxgl.MercatorCoordinate.fromLngLat([lng, lat], altitudeMeters);
     const originMetersToMercator = this.origin.meterInMercatorCoordinateUnits();
     return {
