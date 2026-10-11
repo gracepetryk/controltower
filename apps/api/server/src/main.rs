@@ -1,3 +1,7 @@
+mod aircraft;
+mod error;
+mod store;
+
 use anyhow::Context;
 use axum::{Router, extract::State, http::StatusCode, routing::get};
 use sqlx::{PgPool, postgres::PgPoolOptions};
@@ -21,6 +25,7 @@ async fn main() -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/health", get(health))
+        .route("/aircraft", get(aircraft::list))
         .with_state(pool);
 
     let listener = tokio::net::TcpListener::bind(BIND_ADDR)

@@ -20,7 +20,7 @@ Run these from `apps/api`:
 - `cargo run -p server`: serve on `127.0.0.1:3000`
 - `cargo clippy --workspace`: lint. Run before committing.
 
-There are no tests yet.
+`apps/web` has no tests yet. Run `cargo test --workspace` from `apps/api`.
 
 ## Setup
 
@@ -47,6 +47,7 @@ The crates share no code. Postgres is the only interface between them, and `inge
 - Positions are kept for `RETENTION` (1 day). A second loop in `ingest/src/main.rs` deletes older rows every minute.
 - Migrations are in `migrations/` at the workspace root. `ingest` embeds them with `sqlx::migrate!("../migrations")`. Queries are checked at runtime, so building doesn't need a database.
 - Indexes: GiST on `position`, btree on `(hex, observed_at)` and `(flight, observed_at)`, and BRIN on `observed_at`.
+- `server/src/aircraft.rs` serves `GET /aircraft?bbox=west,south,east,north&trace_seconds=N`. It returns each aircraft whose latest position in the last N seconds is inside `bbox`, with all of its positions from that window, oldest first. `west > east` crosses the antimeridian. `server/src/store.rs` runs the query and groups the rows by `hex`.
 
 ## Gotchas
 
@@ -55,5 +56,6 @@ The crates share no code. Postgres is the only interface between them, and `inge
 - Custom layers only render correctly in Mercator. The map style uses globe projection at low zoom.
 - The style has 3D terrain, but altitudes are relative to sea level. At SEA the ground is about 80 m, so anything lower is hidden under terrain.
 - At high zoom, the Mapbox camera can be lower than the plane, which puts the plane out of view.
+- The newest stored position is usually 10 to 30 s old: adsb.lol lags, and the poll interval adds to that. A `trace_seconds` below about 30 can return nothing.
 - adsb.lol sometimes returns 429 at a 5 s interval, and its `now` runs about 10 s behind real time. Failed polls are logged and retried on the next tick.
 - The console warnings about missing `airport`/`airfield` images come from the map style, not from this code.
