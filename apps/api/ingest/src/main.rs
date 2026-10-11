@@ -31,7 +31,7 @@ async fn main() -> anyhow::Result<()> {
         .connect(&database_url)
         .await
         .context("connecting to the database")?;
-    sqlx::migrate!().run(&pool).await.context("running migrations")?;
+    sqlx::migrate!("../migrations").run(&pool).await.context("running migrations")?;
 
     let client = adsb::Client::new()?;
     tokio::select! {

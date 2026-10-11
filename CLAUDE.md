@@ -3,7 +3,7 @@
 A 3D flight tracker with two apps:
 
 - `apps/web`: the frontend, built with Vite, React 19, TypeScript, mapbox-gl 3, and three.js.
-- `apps/api`: a Rust service that polls adsb.lol and stores aircraft positions in PostGIS.
+- `apps/api`: a Cargo workspace with two binaries. `ingest` polls adsb.lol and stores aircraft positions in PostGIS. `server` is an axum web server that serves flight data to the frontend.
 
 ## Commands
 
@@ -16,8 +16,9 @@ Run these from `apps/web`:
 Run these from `apps/api`:
 
 - `docker compose up -d`: start PostGIS on port 5433
-- `cargo run`: run migrations, then poll every 5 seconds
-- `cargo clippy`: lint. Run before committing.
+- `cargo run -p ingest`: run migrations, then poll every 5 seconds
+- `cargo run -p server`: serve on `127.0.0.1:3000`
+- `cargo clippy --workspace`: lint. Run before committing.
 
 There are no tests yet.
 
@@ -39,10 +40,12 @@ There are no tests yet.
 
 ### api
 
-- `src/adsb.rs` calls `/v2/point/{lat}/{lon}/{radius}`. The center (SEA) and the 150 nm radius are constants in `src/main.rs`. Each aircraft is parsed separately, so a malformed record is skipped instead of failing the whole response.
-- `src/store.rs` inserts every aircraft that has a position into `aircraft_positions` in one `UNNEST` query. `observed_at` is the response's `now` minus `seen_pos`. When a position hasn't changed since the last poll, it has the same `(hex, observed_at)` and the unique index drops the duplicate.
-- Positions are kept for `RETENTION` (1 day). A second loop in `src/main.rs` deletes older rows every minute.
-- Migrations are in `migrations/` and are embedded with `sqlx::migrate!`. Queries are checked at runtime, so building doesn't need a database.
+The crates share no code. Postgres is the only interface between them, and `ingest` owns the schema.
+
+- `ingest/src/adsb.rs` calls `/v2/point/{lat}/{lon}/{radius}`. The center (SEA) and the 150 nm radius are constants in `ingest/src/main.rs`. Each aircraft is parsed separately, so a malformed record is skipped instead of failing the whole response.
+- `ingest/src/store.rs` inserts every aircraft that has a position into `aircraft_positions` in one `UNNEST` query. `observed_at` is the response's `now` minus `seen_pos`. When a position hasn't changed since the last poll, it has the same `(hex, observed_at)` and the unique index drops the duplicate.
+- Positions are kept for `RETENTION` (1 day). A second loop in `ingest/src/main.rs` deletes older rows every minute.
+- Migrations are in `migrations/` at the workspace root. `ingest` embeds them with `sqlx::migrate!("../migrations")`. Queries are checked at runtime, so building doesn't need a database.
 - Indexes: GiST on `position`, btree on `(hex, observed_at)` and `(flight, observed_at)`, and BRIN on `observed_at`.
 
 ## Gotchas
