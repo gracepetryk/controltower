@@ -30,8 +30,9 @@ void main() {
   vec4 clipStart = toClip * vec4(segmentStart, 1.0);
   vec4 clipEnd = toClip * vec4(segmentEnd, 1.0);
 
-  if (nearPlaneDistance(clipStart) < 0.0 && nearPlaneDistance(clipEnd) < 0.0) {
-    // Entirely behind the near plane: place the vertex outside the clip volume.
+  bool isUnused = fadeStart <= 0.0 && fadeEnd <= 0.0;
+  if (isUnused || (nearPlaneDistance(clipStart) < 0.0 && nearPlaneDistance(clipEnd) < 0.0)) {
+    // Unused or entirely behind the near plane: place the vertex outside the clip volume.
     gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
     return;
   }

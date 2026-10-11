@@ -4,17 +4,18 @@ import { SearchBox } from '@mapbox/search-js-react'
 
 import 'mapbox-gl/dist/mapbox-gl.css'
 import './App.css'
-import { PlaneLayer } from './flight/PlaneLayer'
+import { AircraftLayer } from './flight/AircraftLayer'
 import { orbitPosition } from './flight/simulatedFlight'
 
 const accessToken = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN
 const center:[number, number] = [-122.30880, 47.45020]
+const MAX_AIRCRAFT = 1000
 
 const simulatedOrbit = {
   center,
-  radiusMeters: 3000,
-  lapMs: 90_000,
-  altitudeMeters: 900,
+  radiusMeters: 30000,
+  lapMs: 10_000,
+  altitudeMeters: 10000,
   altitudeSwingMeters: 300,
 }
 
@@ -34,11 +35,11 @@ function App() {
     })
     mapRef.current = map
 
-    const planeLayer = new PlaneLayer('plane', center)
-    map.on('load', () => map.addLayer(planeLayer))
+    const aircraftLayer = new AircraftLayer('aircraft', { origin: center, maxAircraft: MAX_AIRCRAFT })
+    map.on('load', () => map.addLayer(aircraftLayer))
 
     let frame = requestAnimationFrame(function tick(now) {
-      planeLayer.setPosition(orbitPosition(simulatedOrbit, now))
+      aircraftLayer.setAircraft('simulated', orbitPosition(simulatedOrbit, now))
       frame = requestAnimationFrame(tick)
     })
 
