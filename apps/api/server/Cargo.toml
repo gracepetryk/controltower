@@ -4,10 +4,12 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+aide = { version = "0.15.1", features = ["axum", "axum-json", "axum-query", "scalar"] }
 anyhow.workspace = true
 axum = "0.8.9"
 chrono.workspace = true
 dotenvy.workspace = true
+schemars = "0.9"
 serde.workspace = true
 sqlx.workspace = true
 tokio = { workspace = true, features = ["net"] }

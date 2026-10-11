@@ -1,12 +1,15 @@
+use aide::transform::TransformOperation;
 use axum::{
     Json,
     extract::{Query, State},
 };
-use chrono::{TimeDelta, Utc};
+use chrono::TimeDelta;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
 use crate::{
+    clock::Clock,
     error::ApiError,
     store::{self, Aircraft, BoundingBox},
 };
@@ -14,26 +17,29 @@ use crate::{
 /// The longest trace a client can request.
 const MAX_TRACE_SECONDS: u32 = 60 * 60;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, JsonSchema)]
 pub struct Params {
-    /// `west,south,east,north` in degrees.
+    /// `west,south,east,north` in degrees. Longitudes are in [-180, 180] and
+    /// latitudes in [-90, 90]. `west > east` crosses the antimeridian.
+    #[schemars(example = "-123.5,46.5,-121,48.5")]
     bbox: String,
+    /// How many seconds of positions to return.
+    #[schemars(range(min = 1, max = MAX_TRACE_SECONDS))]
     trace_seconds: u32,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct AircraftResponse {
-    /// Server time in milliseconds since the Unix epoch.
+    /// Server time in milliseconds since the Unix epoch. When the server is
+    /// replaying recorded positions, this is the replayed time.
     now: i64,
     aircraft: Vec<Aircraft>,
 }
 
 /// `GET /aircraft?bbox=west,south,east,north&trace_seconds=N`
-///
-/// Returns the aircraft whose latest position in the last N seconds is inside
-/// `bbox`, each with its positions from those N seconds.
 pub async fn list(
     State(pool): State<PgPool>,
+    State(clock): State<Clock>,
     Query(params): Query<Params>,
 ) -> Result<Json<AircraftResponse>, ApiError> {
     let area = parse_bbox(&params.bbox)?;
@@ -42,13 +48,25 @@ pub async fn list(
             "trace_seconds must be between 1 and {MAX_TRACE_SECONDS}"
         )));
     }
-    let now = Utc::now();
+    let now = clock.now();
     let since = now - TimeDelta::seconds(params.trace_seconds.into());
-    let aircraft = store::aircraft_in(&pool, &area, since).await?;
+    let aircraft = store::aircraft_in(&pool, &area, since, now).await?;
     Ok(Json(AircraftResponse {
         now: now.timestamp_millis(),
         aircraft,
     }))
+}
+
+pub fn list_docs(op: TransformOperation) -> TransformOperation {
+    op.summary("Aircraft in an area, with traces")
+        .description(
+            "Returns the aircraft whose latest position in the last `trace_seconds` is inside \
+         `bbox`, each with all of its positions from that window, oldest first. Traces may \
+         extend outside `bbox`.",
+        )
+        .response_with::<200, Json<AircraftResponse>, _>(|res| {
+            res.description("The matching aircraft.")
+        })
 }
 
 fn parse_bbox(bbox: &str) -> Result<BoundingBox, ApiError> {

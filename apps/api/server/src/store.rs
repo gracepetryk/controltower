@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use schemars::JsonSchema;
 use serde::Serialize;
 use sqlx::PgPool;
 
@@ -13,7 +14,7 @@ pub struct BoundingBox {
 
 /// An aircraft and its positions, oldest first. The descriptive fields are
 /// the most recent non-null values in the trace.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct Aircraft {
     pub hex: String,
     pub flight: Option<String>,
@@ -26,7 +27,7 @@ pub struct Aircraft {
 
 /// One position report. Units match `aircraft_positions`: feet, knots,
 /// degrees and feet per minute.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct TracePoint {
     /// Milliseconds since the Unix epoch.
     pub observed_at: i64,
@@ -63,13 +64,14 @@ struct PositionRow {
     geom_rate: Option<i32>,
 }
 
-/// Returns the aircraft whose latest position since `since` is inside
-/// `area`, each with every position since `since`. Traces may extend outside
+/// Returns the aircraft whose latest position in `[since, until]` is inside
+/// `area`, each with every position in that window. Traces may extend outside
 /// `area`.
 pub async fn aircraft_in(
     pool: &PgPool,
     area: &BoundingBox,
     since: DateTime<Utc>,
+    until: DateTime<Utc>,
 ) -> sqlx::Result<Vec<Aircraft>> {
     let rows: Vec<PositionRow> = sqlx::query_as(
         r#"
@@ -80,7 +82,7 @@ pub async fn aircraft_in(
                 on_ground, alt_baro, alt_geom, ground_speed, track, true_heading,
                 baro_rate, geom_rate
             FROM aircraft_positions
-            WHERE observed_at >= $5
+            WHERE observed_at BETWEEN $5 AND $6
         ),
         in_area AS (
             SELECT hex
@@ -109,6 +111,7 @@ pub async fn aircraft_in(
     .bind(area.east)
     .bind(area.north)
     .bind(since)
+    .bind(until)
     .fetch_all(pool)
     .await?;
     Ok(group_by_aircraft(rows))

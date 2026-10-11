@@ -1,7 +1,9 @@
 mod adsb;
+mod globe_history;
+mod import;
 mod store;
 
-use std::time::Duration;
+use std::{path::PathBuf, time::Duration};
 
 use anyhow::Context;
 use chrono::{TimeDelta, Utc};
@@ -12,14 +14,22 @@ use tracing_subscriber::EnvFilter;
 /// Seattle-Tacoma International Airport.
 const CENTER_LAT: f64 = 47.4502;
 const CENTER_LON: f64 = -122.3088;
-const RADIUS_NM: u32 = 150;
-const POLL_INTERVAL: Duration = Duration::from_secs(5);
+const RADIUS_NM: u32 = 50;
+const POLL_INTERVAL: Duration = Duration::from_secs(10);
 /// How long positions are kept.
 const RETENTION: TimeDelta = TimeDelta::days(1);
 const PRUNE_INTERVAL: Duration = Duration::from_secs(60);
 
+const USAGE: &str = "usage: ingest [import <globe history dir>]";
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let import_dir = match std::env::args().skip(1).collect::<Vec<_>>().as_slice() {
+        [] => None,
+        [command, dir] if command == "import" => Some(PathBuf::from(dir)),
+        _ => anyhow::bail!(USAGE),
+    };
+
     dotenvy::dotenv().ok();
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
@@ -31,7 +41,19 @@ async fn main() -> anyhow::Result<()> {
         .connect(&database_url)
         .await
         .context("connecting to the database")?;
-    sqlx::migrate!("../migrations").run(&pool).await.context("running migrations")?;
+    sqlx::migrate!("../migrations")
+        .run(&pool)
+        .await
+        .context("running migrations")?;
+
+    if let Some(dir) = import_dir {
+        let area = import::Area {
+            lat: CENTER_LAT,
+            lon: CENTER_LON,
+            radius_nm: RADIUS_NM.into(),
+        };
+        return import::run(&pool, &dir, area).await;
+    }
 
     let client = adsb::Client::new()?;
     tokio::select! {
@@ -57,12 +79,9 @@ async fn poll(client: &adsb::Client, pool: &sqlx::PgPool) {
                 continue;
             }
         };
-        match store::insert_positions(pool, &snapshot).await {
-            Ok(inserted) => tracing::info!(
-                aircraft = snapshot.aircraft.len(),
-                inserted,
-                "stored positions"
-            ),
+        let aircraft = snapshot.aircraft.len();
+        match store::insert_positions(pool, snapshot.into_positions()).await {
+            Ok(inserted) => tracing::info!(aircraft, inserted, "stored positions"),
             Err(err) => tracing::error!("storing positions: {err:#}"),
         }
     }

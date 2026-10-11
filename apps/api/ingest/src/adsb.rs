@@ -6,7 +6,9 @@ use anyhow::Context;
 use chrono::{DateTime, TimeDelta, Utc};
 use serde::Deserialize;
 
-const BASE_URL: &str = "https://api.adsb.lol/v2";
+use crate::store::Position;
+
+const BASE_URL: &str = "https://api.airplanes.live/v2";
 
 pub struct Client {
     http: reqwest::Client,
@@ -100,7 +102,47 @@ impl Client {
     }
 }
 
+impl Snapshot {
+    /// The aircraft that have a position, as rows to store.
+    pub fn into_positions(self) -> Vec<Position> {
+        let now = self.now;
+        self.aircraft
+            .into_iter()
+            .filter_map(|aircraft| aircraft.into_position(now))
+            .collect()
+    }
+}
+
 impl Aircraft {
+    fn into_position(self, now: DateTime<Utc>) -> Option<Position> {
+        let (Some(lat), Some(lon), Some(observed_at)) = (self.lat, self.lon, self.observed_at(now))
+        else {
+            return None;
+        };
+        let flight = self.callsign().map(str::to_owned);
+        let (on_ground, alt_baro) = BaroAltitude::split(self.alt_baro);
+        Some(Position {
+            observed_at,
+            hex: self.hex,
+            flight,
+            registration: self.registration,
+            aircraft_type: self.aircraft_type,
+            category: self.category,
+            source: self.source,
+            lat,
+            lon,
+            on_ground,
+            alt_baro,
+            alt_geom: self.alt_geom,
+            ground_speed: self.gs,
+            track: self.track,
+            true_heading: self.true_heading,
+            baro_rate: self.baro_rate,
+            geom_rate: self.geom_rate,
+            squawk: self.squawk,
+        })
+    }
+
     /// When the aircraft's position was last updated, or `None` if it has no
     /// position or `seen_pos` is out of range.
     pub fn observed_at(&self, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
@@ -111,8 +153,25 @@ impl Aircraft {
 
     /// The callsign without its trailing padding, if it is non-empty.
     pub fn callsign(&self) -> Option<&str> {
-        self.flight.as_deref().map(str::trim).filter(|s| !s.is_empty())
+        self.flight.as_deref().and_then(trim_callsign)
     }
+}
+
+impl BaroAltitude {
+    /// Whether the aircraft is on the ground, and its altitude in feet if it
+    /// is airborne.
+    pub fn split(altitude: Option<Self>) -> (bool, Option<i32>) {
+        match altitude {
+            Some(Self::Feet(feet)) => (false, Some(feet)),
+            Some(Self::Ground) => (true, None),
+            None => (false, None),
+        }
+    }
+}
+
+/// `flight` without its trailing padding, if it is non-empty.
+pub fn trim_callsign(flight: &str) -> Option<&str> {
+    Some(flight.trim()).filter(|s| !s.is_empty())
 }
 
 fn deserialize_ground<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<(), D::Error> {

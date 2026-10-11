@@ -1,13 +1,47 @@
 mod aircraft;
+mod clock;
 mod error;
 mod store;
 
+use std::sync::Arc;
+
+use aide::{
+    axum::{ApiRouter, IntoApiResponse, routing::get_with},
+    openapi::{Info, OpenApi},
+    scalar::Scalar,
+    transform::TransformOperation,
+};
 use anyhow::Context;
-use axum::{Router, extract::State, http::StatusCode, routing::get};
+use axum::{
+    Extension, Json,
+    extract::{FromRef, State},
+    http::StatusCode,
+    routing::get,
+};
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use tracing_subscriber::EnvFilter;
 
+use crate::clock::Clock;
+
 const BIND_ADDR: &str = "127.0.0.1:3000";
+
+#[derive(Clone)]
+struct AppState {
+    pool: PgPool,
+    clock: Clock,
+}
+
+impl FromRef<AppState> for PgPool {
+    fn from_ref(state: &AppState) -> Self {
+        state.pool.clone()
+    }
+}
+
+impl FromRef<AppState> for Clock {
+    fn from_ref(state: &AppState) -> Self {
+        state.clock
+    }
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -16,6 +50,10 @@ async fn main() -> anyhow::Result<()> {
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
 
+    let clock = Clock::from_env()?;
+    if let Clock::Replay(date) = clock {
+        tracing::info!(%date, "replaying recorded positions");
+    }
     let database_url = std::env::var("DATABASE_URL").context("DATABASE_URL must be set")?;
     let pool = PgPoolOptions::new()
         .max_connections(8)
@@ -23,10 +61,27 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("connecting to the database")?;
 
-    let app = Router::new()
-        .route("/health", get(health))
-        .route("/aircraft", get(aircraft::list))
-        .with_state(pool);
+    let mut api = OpenApi {
+        info: Info {
+            title: "controltower".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+            ..Info::default()
+        },
+        ..OpenApi::default()
+    };
+    let app = ApiRouter::new()
+        .api_route("/health", get_with(health, health_docs))
+        .api_route("/aircraft", get_with(aircraft::list, aircraft::list_docs))
+        .route("/openapi.json", get(openapi_json))
+        .route(
+            "/docs",
+            Scalar::new("/openapi.json")
+                .with_title("controltower API")
+                .axum_route(),
+        )
+        .finish_api(&mut api)
+        .layer(Extension(Arc::new(api)))
+        .with_state(AppState { pool, clock });
 
     let listener = tokio::net::TcpListener::bind(BIND_ADDR)
         .await
@@ -41,7 +96,6 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Returns 200 when the database is reachable.
 async fn health(State(pool): State<PgPool>) -> StatusCode {
     match sqlx::query("SELECT 1").execute(&pool).await {
         Ok(_) => StatusCode::OK,
@@ -50,4 +104,13 @@ async fn health(State(pool): State<PgPool>) -> StatusCode {
             StatusCode::SERVICE_UNAVAILABLE
         }
     }
+}
+
+fn health_docs(op: TransformOperation) -> TransformOperation {
+    op.summary("Health check")
+        .description("Returns 200 when the database is reachable and 503 when it isn't.")
+}
+
+async fn openapi_json(Extension(api): Extension<Arc<OpenApi>>) -> impl IntoApiResponse {
+    Json(api)
 }

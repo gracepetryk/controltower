@@ -16,7 +16,8 @@ Run these from `apps/web`:
 Run these from `apps/api`:
 
 - `docker compose up -d`: start PostGIS on port 5433
-- `cargo run -p ingest`: run migrations, then poll every 5 seconds
+- `cargo run -p ingest`: run migrations, then poll every 10 seconds
+- `cargo run --release -p ingest -- import <dir>`: run migrations, then load the positions in a day of adsb.lol globe history from `<dir>` that are within `RADIUS_NM` of the center
 - `cargo run -p server`: serve on `127.0.0.1:3000`
 - `cargo clippy --workspace`: lint. Run before committing.
 
@@ -42,12 +43,15 @@ Run these from `apps/api`:
 
 The crates share no code. Postgres is the only interface between them, and `ingest` owns the schema.
 
-- `ingest/src/adsb.rs` calls `/v2/point/{lat}/{lon}/{radius}`. The center (SEA) and the 150 nm radius are constants in `ingest/src/main.rs`. Each aircraft is parsed separately, so a malformed record is skipped instead of failing the whole response.
+- `ingest/src/adsb.rs` calls `/v2/point/{lat}/{lon}/{radius}`. The center (SEA) and the 50 nm radius are constants in `ingest/src/main.rs`. Each aircraft is parsed separately, so a malformed record is skipped instead of failing the whole response.
 - `ingest/src/store.rs` inserts every aircraft that has a position into `aircraft_positions` in one `UNNEST` query. `observed_at` is the response's `now` minus `seen_pos`. When a position hasn't changed since the last poll, it has the same `(hex, observed_at)` and the unique index drops the duplicate.
+- `ingest import` loads the `traces/` of an adsb.lol daily globe history release (https://github.com/adsblol/globe_history_2026). `ingest/src/globe_history.rs` parses readsb's `trace_full_*.json` files, and `ingest/src/import.rs` inserts the positions within `RADIUS_NM` of the poller's center in batches.
 - Positions are kept for `RETENTION` (1 day). A second loop in `ingest/src/main.rs` deletes older rows every minute.
 - Migrations are in `migrations/` at the workspace root. `ingest` embeds them with `sqlx::migrate!("../migrations")`. Queries are checked at runtime, so building doesn't need a database.
 - Indexes: GiST on `position`, btree on `(hex, observed_at)` and `(flight, observed_at)`, and BRIN on `observed_at`.
 - `server/src/aircraft.rs` serves `GET /aircraft?bbox=west,south,east,north&trace_seconds=N`. It returns each aircraft whose latest position in the last N seconds is inside `bbox`, with all of its positions from that window, oldest first. `west > east` crosses the antimeridian. `server/src/store.rs` runs the query and groups the rows by `hex`.
+- When `REPLAY_DATE` (`YYYY-MM-DD`) is set, the server's clock (`server/src/clock.rs`) is the current UTC time of day on that date, so imported history plays back as if it were live.
+- The server documents its routes with aide. Each route is added with `api_route` and a `*_docs` function, and response types derive `schemars::JsonSchema`. The spec is served at `/openapi.json` and a Scalar docs page at `/docs`.
 
 ## Gotchas
 
@@ -56,6 +60,8 @@ The crates share no code. Postgres is the only interface between them, and `inge
 - Custom layers only render correctly in Mercator. The map style uses globe projection at low zoom.
 - The style has 3D terrain, but altitudes are relative to sea level. At SEA the ground is about 80 m, so anything lower is hidden under terrain.
 - At high zoom, the Mapbox camera can be lower than the plane, which puts the plane out of view.
-- The newest stored position is usually 10 to 30 s old: adsb.lol lags, and the poll interval adds to that. A `trace_seconds` below about 30 can return nothing.
-- adsb.lol sometimes returns 429 at a 5 s interval, and its `now` runs about 10 s behind real time. Failed polls are logged and retried on the next tick.
+- The newest stored position is usually 10 to 35 s old: adsb.lol lags, and the poll interval adds to that. A `trace_seconds` below about 30 can return nothing.
+- adsb.lol returned frequent 429s at a 5 s interval, so ingest polls every 10 s. Its `now` runs about 10 s behind real time. Failed polls are logged and retried on the next tick.
+- `cargo run -p ingest` (polling) prunes rows older than a day, so it deletes imported history. Don't run it while replaying.
+- A day of globe history is about 96M positions worldwide and about 300 bytes per row in Postgres, which is why `ingest import` keeps only the SEA area. It still parses every file, so run it with `--release`.
 - The console warnings about missing `airport`/`airfield` images come from the map style, not from this code.

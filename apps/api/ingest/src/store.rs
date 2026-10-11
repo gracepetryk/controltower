@@ -1,39 +1,51 @@
+use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
-use crate::adsb::{BaroAltitude, Snapshot};
+/// One position report, in the units of `aircraft_positions`.
+pub struct Position {
+    pub observed_at: DateTime<Utc>,
+    pub hex: String,
+    pub flight: Option<String>,
+    pub registration: Option<String>,
+    pub aircraft_type: Option<String>,
+    pub category: Option<String>,
+    pub source: String,
+    pub lat: f64,
+    pub lon: f64,
+    pub on_ground: bool,
+    pub alt_baro: Option<i32>,
+    pub alt_geom: Option<i32>,
+    pub ground_speed: Option<f32>,
+    pub track: Option<f32>,
+    pub true_heading: Option<f32>,
+    pub baro_rate: Option<i32>,
+    pub geom_rate: Option<i32>,
+    pub squawk: Option<String>,
+}
 
-/// Inserts every aircraft in the snapshot that has a position, skipping
-/// positions already stored. Returns the number of rows inserted.
-pub async fn insert_positions(pool: &PgPool, snapshot: &Snapshot) -> sqlx::Result<u64> {
+/// Inserts `positions`, skipping positions already stored. Returns the number
+/// of rows inserted.
+pub async fn insert_positions(pool: &PgPool, positions: Vec<Position>) -> sqlx::Result<u64> {
     let mut rows = Rows::default();
-    for aircraft in &snapshot.aircraft {
-        let (Some(lat), Some(lon), Some(observed_at)) =
-            (aircraft.lat, aircraft.lon, aircraft.observed_at(snapshot.now))
-        else {
-            continue;
-        };
-        let on_ground = matches!(aircraft.alt_baro, Some(BaroAltitude::Ground));
-        rows.observed_at.push(observed_at);
-        rows.hex.push(aircraft.hex.clone());
-        rows.flight.push(aircraft.callsign().map(str::to_owned));
-        rows.registration.push(aircraft.registration.clone());
-        rows.aircraft_type.push(aircraft.aircraft_type.clone());
-        rows.category.push(aircraft.category.clone());
-        rows.source.push(aircraft.source.clone());
-        rows.lat.push(lat);
-        rows.lon.push(lon);
-        rows.on_ground.push(on_ground);
-        rows.alt_baro.push(match aircraft.alt_baro {
-            Some(BaroAltitude::Feet(feet)) => Some(feet),
-            _ => None,
-        });
-        rows.alt_geom.push(aircraft.alt_geom);
-        rows.ground_speed.push(aircraft.gs);
-        rows.track.push(aircraft.track);
-        rows.true_heading.push(aircraft.true_heading);
-        rows.baro_rate.push(aircraft.baro_rate);
-        rows.geom_rate.push(aircraft.geom_rate);
-        rows.squawk.push(aircraft.squawk.clone());
+    for position in positions {
+        rows.observed_at.push(position.observed_at);
+        rows.hex.push(position.hex);
+        rows.flight.push(position.flight);
+        rows.registration.push(position.registration);
+        rows.aircraft_type.push(position.aircraft_type);
+        rows.category.push(position.category);
+        rows.source.push(position.source);
+        rows.lat.push(position.lat);
+        rows.lon.push(position.lon);
+        rows.on_ground.push(position.on_ground);
+        rows.alt_baro.push(position.alt_baro);
+        rows.alt_geom.push(position.alt_geom);
+        rows.ground_speed.push(position.ground_speed);
+        rows.track.push(position.track);
+        rows.true_heading.push(position.true_heading);
+        rows.baro_rate.push(position.baro_rate);
+        rows.geom_rate.push(position.geom_rate);
+        rows.squawk.push(position.squawk);
     }
     if rows.hex.is_empty() {
         return Ok(0);
@@ -89,7 +101,7 @@ pub async fn insert_positions(pool: &PgPool, snapshot: &Snapshot) -> sqlx::Resul
 /// Column-oriented rows, bound as one array per column.
 #[derive(Default)]
 struct Rows {
-    observed_at: Vec<chrono::DateTime<chrono::Utc>>,
+    observed_at: Vec<DateTime<Utc>>,
     hex: Vec<String>,
     flight: Vec<Option<String>>,
     registration: Vec<Option<String>>,
@@ -111,10 +123,7 @@ struct Rows {
 
 /// Deletes positions observed before `cutoff`. Returns the number of rows
 /// deleted.
-pub async fn delete_positions_before(
-    pool: &PgPool,
-    cutoff: chrono::DateTime<chrono::Utc>,
-) -> sqlx::Result<u64> {
+pub async fn delete_positions_before(pool: &PgPool, cutoff: DateTime<Utc>) -> sqlx::Result<u64> {
     let result = sqlx::query("DELETE FROM aircraft_positions WHERE observed_at < $1")
         .bind(cutoff)
         .execute(pool)
