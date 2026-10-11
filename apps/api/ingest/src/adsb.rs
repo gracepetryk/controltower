@@ -101,10 +101,12 @@ impl Client {
 }
 
 impl Aircraft {
-    /// When the aircraft's position was last updated.
+    /// When the aircraft's position was last updated, or `None` if it has no
+    /// position or `seen_pos` is out of range.
     pub fn observed_at(&self, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
         let seen_pos = self.seen_pos?;
-        Some(now - TimeDelta::milliseconds((seen_pos * 1000.0).round() as i64))
+        let age = TimeDelta::try_milliseconds((seen_pos * 1000.0).round() as i64)?;
+        now.checked_sub_signed(age)
     }
 
     /// The callsign without its trailing padding, if it is non-empty.
