@@ -7,7 +7,6 @@ import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { FadingTrail } from './FadingTrail';
 import type { FlightPosition } from './types';
 
-const PLANE_LENGTH_METERS = 40;
 // The plane is scaled up when zoomed out so it stays at least this long on screen.
 const MIN_PLANE_LENGTH_PIXELS = 16;
 const TRAIL_MIN_SPACING_METERS = 25;
@@ -17,7 +16,25 @@ const MAPBOX_TILE_SIZE = 512;
 const TRAIL_COLOR = '#ff8c1a';
 const DROP_LINE_COLOR = '#ffffff';
 
-// Builds a simple airliner from primitives, nose along +y, up along +z, roughly PLANE_LENGTH_METERS long.
+// Airbus A300-600 dimensions.
+const A300_LENGTH_METERS = 54.08;
+const A300_WINGSPAN_METERS = 44.84;
+const A300_TAILPLANE_SPAN_METERS = 16.26;
+const A300_FUSELAGE_DIAMETER_METERS = 5.64;
+
+// A flat planform in the x/y plane, extruded `thickness` meters along +z.
+function planform(outline: [number, number][], thickness: number): THREE.ExtrudeGeometry {
+  const shape = new THREE.Shape(outline.map(([x, y]) => new THREE.Vector2(x, y)));
+  return new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false });
+}
+
+// A planform symmetric about the y axis, given its right half from root leading edge to root trailing edge.
+function mirroredPlanform(rightHalf: [number, number][], thickness: number): THREE.ExtrudeGeometry {
+  const leftHalf = rightHalf.map(([x, y]): [number, number] => [-x, y]).reverse();
+  return planform([...rightHalf, ...leftHalf.slice(1, -1)], thickness);
+}
+
+// Builds an A300-600 at true scale in meters, nose along +y, up along +z, centered on its length.
 function buildPlaneModel(): THREE.Group {
   const body = new THREE.MeshLambertMaterial({ color: 0xf4f4f4, side: THREE.DoubleSide });
   const accent = new THREE.MeshLambertMaterial({ color: 0x1f6feb, side: THREE.DoubleSide });
@@ -29,13 +46,51 @@ function buildPlaneModel(): THREE.Group {
     return mesh;
   };
 
+  const radius = A300_FUSELAGE_DIAMETER_METERS / 2;
+  const noseY = A300_LENGTH_METERS / 2;
+  const tailY = -A300_LENGTH_METERS / 2;
+  const noseLength = 6;
+  const tailConeLength = 7;
+  const cabinLength = A300_LENGTH_METERS - noseLength - tailConeLength;
+  const cabinCenterY = tailY + tailConeLength + cabinLength / 2;
+
+  const halfSpan = A300_WINGSPAN_METERS / 2;
+  // 28° leading-edge sweep.
+  const wingSweep = Math.tan(THREE.MathUtils.degToRad(28)) * halfSpan;
+  const wing = mirroredPlanform(
+    [[0, 4], [halfSpan, 4 - wingSweep], [halfSpan, 1.5 - wingSweep], [0, -6]],
+    0.6,
+  );
+
+  const halfTailSpan = A300_TAILPLANE_SPAN_METERS / 2;
+  const tailSweep = Math.tan(THREE.MathUtils.degToRad(32)) * halfTailSpan;
+  const tailplane = mirroredPlanform(
+    [[0, -19], [halfTailSpan, -19 - tailSweep], [halfTailSpan, -21 - tailSweep], [0, -24]],
+    0.4,
+  );
+
+  // Fin outline in (y, z), rotated so its extrusion runs along x.
+  const fin = planform([[-17, 0], [-24.5, 8], [-27, 8], [-26, 0]], 0.5)
+    .applyMatrix4(new THREE.Matrix4().makeBasis(
+      new THREE.Vector3(0, 1, 0),
+      new THREE.Vector3(0, 0, 1),
+      new THREE.Vector3(1, 0, 0),
+    ));
+
+  const tailCone = new THREE.ConeGeometry(radius, tailConeLength, 24).rotateZ(Math.PI);
+  const engineX = 9.3;
+  const engineGeometry = () => new THREE.CylinderGeometry(1.35, 1.2, 7, 16);
+
   const plane = new THREE.Group();
   plane.add(
-    part(new THREE.CylinderGeometry(2, 2, 34, 16), body, 0, 0, 0),
-    part(new THREE.ConeGeometry(2, 5, 16), body, 0, 19.5, 0),
-    part(new THREE.BoxGeometry(34, 5, 0.6), body, 0, 2, -0.5),
-    part(new THREE.BoxGeometry(12, 3, 0.5), accent, 0, -15, 0.5),
-    part(new THREE.BoxGeometry(0.6, 4, 7), accent, 0, -15, 4),
+    part(new THREE.CylinderGeometry(radius, radius, cabinLength, 24), body, 0, cabinCenterY, 0),
+    part(new THREE.ConeGeometry(radius, noseLength, 24), body, 0, noseY - noseLength / 2, 0),
+    part(tailCone, body, 0, tailY + tailConeLength / 2, 0),
+    part(wing, body, 0, 0, -radius * 0.6),
+    part(engineGeometry(), body, engineX, 2, -radius * 0.6 - 1.6),
+    part(engineGeometry(), body, -engineX, 2, -radius * 0.6 - 1.6),
+    part(tailplane, accent, 0, 0, 0.3),
+    part(fin, accent, -0.25, 0, radius * 0.7),
   );
   return plane;
 }
@@ -154,6 +209,6 @@ export class PlaneLayer implements mapboxgl.CustomLayerInterface {
   private planeScale(zoom: number, lat: number): number {
     const metersPerPixel =
       (EARTH_CIRCUMFERENCE_METERS * Math.cos(THREE.MathUtils.degToRad(lat))) / (MAPBOX_TILE_SIZE * 2 ** zoom);
-    return Math.max(1, (MIN_PLANE_LENGTH_PIXELS * metersPerPixel) / PLANE_LENGTH_METERS);
+    return Math.max(1, (MIN_PLANE_LENGTH_PIXELS * metersPerPixel) / A300_LENGTH_METERS);
   }
 }
