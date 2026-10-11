@@ -4,13 +4,14 @@ import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 
+import { FadingTrail } from './FadingTrail';
 import type { FlightPosition } from './types';
 
 const PLANE_LENGTH_METERS = 40;
 // The plane is scaled up when zoomed out so it stays at least this long on screen.
 const MIN_PLANE_LENGTH_PIXELS = 16;
 const TRAIL_MIN_SPACING_METERS = 25;
-const MAX_TRAIL_POINTS = 500;
+const MAX_TRAIL_POINTS = 100;
 const EARTH_CIRCUMFERENCE_METERS = 40_075_016.686;
 const MAPBOX_TILE_SIZE = 512;
 const TRAIL_COLOR = '#ff8c1a';
@@ -52,8 +53,7 @@ export class PlaneLayer implements mapboxgl.CustomLayerInterface {
   private readonly scene = new THREE.Scene();
   private readonly camera = new THREE.Camera();
   private readonly plane = buildPlaneModel();
-  private readonly trailMaterial = new LineMaterial({ color: TRAIL_COLOR, linewidth: 2 });
-  private readonly trail = new Line2(new LineGeometry(), this.trailMaterial);
+  private readonly trail = new FadingTrail({ color: TRAIL_COLOR, linewidth: 2, maxPoints: MAX_TRAIL_POINTS });
   private readonly dropLineMaterial = new LineMaterial({
     color: DROP_LINE_COLOR,
     linewidth: 1,
@@ -76,8 +76,6 @@ export class PlaneLayer implements mapboxgl.CustomLayerInterface {
       .makeTranslation(this.origin.x, this.origin.y, 0)
       .scale(new THREE.Vector3(metersToMercator, -metersToMercator, metersToMercator));
 
-    this.trail.frustumCulled = false;
-    this.trail.visible = false;
     this.dropLine.frustumCulled = false;
     this.dropLine.visible = false;
     this.plane.visible = false;
@@ -105,7 +103,7 @@ export class PlaneLayer implements mapboxgl.CustomLayerInterface {
       if (this.trailPoints.length > MAX_TRAIL_POINTS) {
         this.trailPoints.shift();
       }
-      this.rebuildTrail();
+      this.trail.setPoints(this.trailPoints);
     }
 
     this.map?.triggerRepaint();
@@ -135,7 +133,7 @@ export class PlaneLayer implements mapboxgl.CustomLayerInterface {
     }
 
     this.plane.scale.setScalar(this.planeScale(this.map.getZoom(), this.position.lat));
-    this.trailMaterial.resolution.set(gl.drawingBufferWidth, gl.drawingBufferHeight);
+    this.trail.setResolution(gl.drawingBufferWidth, gl.drawingBufferHeight);
     this.dropLineMaterial.resolution.set(gl.drawingBufferWidth, gl.drawingBufferHeight);
     this.camera.projectionMatrix.fromArray(matrix).multiply(this.sceneToMercator);
 
@@ -157,17 +155,5 @@ export class PlaneLayer implements mapboxgl.CustomLayerInterface {
     const metersPerPixel =
       (EARTH_CIRCUMFERENCE_METERS * Math.cos(THREE.MathUtils.degToRad(lat))) / (MAPBOX_TILE_SIZE * 2 ** zoom);
     return Math.max(1, (MIN_PLANE_LENGTH_PIXELS * metersPerPixel) / PLANE_LENGTH_METERS);
-  }
-
-  // LineGeometry can't grow in place, so the trail gets a new geometry each time a point is added.
-  private rebuildTrail() {
-    if (this.trailPoints.length < 2) {
-      return;
-    }
-    const geometry = new LineGeometry();
-    geometry.setPositions(this.trailPoints.flatMap((p) => [p.x, p.y, p.z]));
-    this.trail.geometry.dispose();
-    this.trail.geometry = geometry;
-    this.trail.visible = true;
   }
 }
