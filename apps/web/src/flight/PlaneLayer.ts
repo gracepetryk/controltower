@@ -16,11 +16,11 @@ const MAPBOX_TILE_SIZE = 512;
 const TRAIL_COLOR = '#ff8c1a';
 const DROP_LINE_COLOR = '#ffffff';
 
-// Airbus A300-600 dimensions.
-const A300_LENGTH_METERS = 54.08;
-const A300_WINGSPAN_METERS = 44.84;
-const A300_TAILPLANE_SPAN_METERS = 16.26;
-const A300_FUSELAGE_DIAMETER_METERS = 5.64;
+// Airbus A320-200 dimensions.
+const A320_LENGTH_METERS = 37.57;
+const A320_WINGSPAN_METERS = 35.80;
+const A320_TAILPLANE_SPAN_METERS = 12.44;
+const A320_FUSELAGE_DIAMETER_METERS = 3.95;
 
 // A flat planform in the x/y plane, extruded `thickness` meters along +z.
 function planform(outline: [number, number][], thickness: number): THREE.ExtrudeGeometry {
@@ -46,15 +46,15 @@ function buildPlaneModel(): THREE.Group {
     return mesh;
   };
 
-  const radius = A300_FUSELAGE_DIAMETER_METERS / 2;
-  const noseY = A300_LENGTH_METERS / 2;
-  const tailY = -A300_LENGTH_METERS / 2;
+  const radius = A320_FUSELAGE_DIAMETER_METERS / 2;
+  const noseY = A320_LENGTH_METERS / 2;
+  const tailY = -A320_LENGTH_METERS / 2;
   const noseLength = 6;
   const tailConeLength = 7;
-  const cabinLength = A300_LENGTH_METERS - noseLength - tailConeLength;
+  const cabinLength = A320_LENGTH_METERS - noseLength - tailConeLength;
   const cabinCenterY = tailY + tailConeLength + cabinLength / 2;
 
-  const halfSpan = A300_WINGSPAN_METERS / 2;
+  const halfSpan = A320_WINGSPAN_METERS / 2;
   // 28° leading-edge sweep.
   const wingSweep = Math.tan(THREE.MathUtils.degToRad(28)) * halfSpan;
   const wing = mirroredPlanform(
@@ -62,7 +62,7 @@ function buildPlaneModel(): THREE.Group {
     0.6,
   );
 
-  const halfTailSpan = A300_TAILPLANE_SPAN_METERS / 2;
+  const halfTailSpan = A320_TAILPLANE_SPAN_METERS / 2;
   const tailSweep = Math.tan(THREE.MathUtils.degToRad(32)) * halfTailSpan;
   const tailplane = mirroredPlanform(
     [[0, -19], [halfTailSpan, -19 - tailSweep], [halfTailSpan, -21 - tailSweep], [0, -24]],
@@ -95,6 +95,32 @@ function buildPlaneModel(): THREE.Group {
   return plane;
 }
 
+// Unit vector in the scene frame pointing along a heading in degrees clockwise from north.
+function headingDirection(headingDegrees: number): THREE.Vector3 {
+  const heading = THREE.MathUtils.degToRad(headingDegrees);
+  return new THREE.Vector3(Math.sin(heading), Math.cos(heading), 0);
+}
+
+// A curve from `start` to `end` that leaves along `startHeadingDegrees` and arrives along
+// `endHeadingDegrees`. Its tangents scale with the horizontal distance, and altitude changes linearly.
+function trailCurve(
+  start: THREE.Vector3,
+  startHeadingDegrees: number,
+  end: THREE.Vector3,
+  endHeadingDegrees: number,
+): THREE.CubicBezierCurve3 {
+  const horizontalDistance = Math.hypot(end.x - start.x, end.y - start.y);
+  const climb = new THREE.Vector3(0, 0, end.z - start.z);
+  const tangent = (headingDegrees: number) =>
+    headingDirection(headingDegrees).multiplyScalar(horizontalDistance).add(climb).divideScalar(3);
+  return new THREE.CubicBezierCurve3(
+    start,
+    start.clone().add(tangent(startHeadingDegrees)),
+    end.clone().sub(tangent(endHeadingDegrees)),
+    end,
+  );
+}
+
 // Mapbox custom layer that renders a 3D plane at the latest position passed to `setPosition`,
 // with a trail through its previous positions and a faint vertical line down to the ground.
 export class PlaneLayer implements mapboxgl.CustomLayerInterface {
@@ -118,6 +144,7 @@ export class PlaneLayer implements mapboxgl.CustomLayerInterface {
   // A 1 m vertical segment, stretched to the plane's altitude in setPosition.
   private readonly dropLine = new Line2(new LineGeometry().setPositions([0, 0, 0, 0, 0, 1]), this.dropLineMaterial);
   private trailPoints: THREE.Vector3[] = [];
+  private lastTrailHeadingDegrees = 0;
   private position: FlightPosition | null = null;
   private map: mapboxgl.Map | null = null;
   private renderer: THREE.WebGLRenderer | null = null;
@@ -154,10 +181,9 @@ export class PlaneLayer implements mapboxgl.CustomLayerInterface {
 
     const last = this.trailPoints.at(-1);
     if (!last || last.distanceTo(point) >= TRAIL_MIN_SPACING_METERS) {
-      this.trailPoints.push(point);
-      if (this.trailPoints.length > MAX_TRAIL_POINTS) {
-        this.trailPoints.shift();
-      }
+      this.trailPoints.push(...this.trailPointsTo(point, position.headingDegrees));
+      this.trailPoints.splice(0, this.trailPoints.length - MAX_TRAIL_POINTS);
+      this.lastTrailHeadingDegrees = position.headingDegrees;
       this.trail.setPoints(this.trailPoints);
     }
 
@@ -196,6 +222,25 @@ export class PlaneLayer implements mapboxgl.CustomLayerInterface {
     this.renderer.render(this.scene, this.camera);
   }
 
+  // New trail points ending at `point`, spaced about TRAIL_MIN_SPACING_METERS apart along a curve
+  // from the last trail point. Fills gaps, such as while the page is hidden and no frames run,
+  // with a path that matches the heading at both ends. Returns at most MAX_TRAIL_POINTS points.
+  private trailPointsTo(point: THREE.Vector3, headingDegrees: number): THREE.Vector3[] {
+    const last = this.trailPoints.at(-1);
+    if (!last) {
+      return [point];
+    }
+
+    const curve = trailCurve(last, this.lastTrailHeadingDegrees, point, headingDegrees);
+    const divisions = Math.max(1, Math.floor(curve.getLength() / TRAIL_MIN_SPACING_METERS));
+    const points: THREE.Vector3[] = [];
+    for (let i = Math.max(1, divisions - MAX_TRAIL_POINTS + 1); i < divisions; i++) {
+      points.push(curve.getPointAt(i / divisions));
+    }
+    points.push(point);
+    return points;
+  }
+
   private toScene({ lng, lat, altitudeMeters }: FlightPosition): THREE.Vector3 {
     const coordinate = mapboxgl.MercatorCoordinate.fromLngLat([lng, lat], altitudeMeters);
     const mercatorToMeters = 1 / this.origin.meterInMercatorCoordinateUnits();
@@ -209,6 +254,6 @@ export class PlaneLayer implements mapboxgl.CustomLayerInterface {
   private planeScale(zoom: number, lat: number): number {
     const metersPerPixel =
       (EARTH_CIRCUMFERENCE_METERS * Math.cos(THREE.MathUtils.degToRad(lat))) / (MAPBOX_TILE_SIZE * 2 ** zoom);
-    return Math.max(1, (MIN_PLANE_LENGTH_PIXELS * metersPerPixel) / A300_LENGTH_METERS);
+    return Math.max(1, (MIN_PLANE_LENGTH_PIXELS * metersPerPixel) / A320_LENGTH_METERS);
   }
 }
