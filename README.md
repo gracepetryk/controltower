@@ -43,3 +43,10 @@ REPLAY_DATE=2026-10-10 cargo run -p controltower-server
 ```
 
 Don't run the poller while replaying: it deletes positions older than a day.
+
+To run the server in Docker instead, build the image from `apps/api`. It listens on `0.0.0.0:3000`:
+
+```sh
+docker build -f server/Dockerfile -t controltower-server .
+docker run -p 3000:3000 -e DATABASE_URL=<url> controltower-server
+```

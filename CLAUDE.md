@@ -18,7 +18,8 @@ Run these from `apps/api`:
 - `docker compose up -d`: start PostGIS on port 5433
 - `cargo run -p ingest`: run migrations, then poll every 10 seconds
 - `cargo run --release -p ingest -- import <dir>`: run migrations, then load the positions in a day of adsb.lol globe history from `<dir>` that are within `RADIUS_NM` of the center
-- `cargo run -p controltower-server`: serve on `127.0.0.1:3000`
+- `cargo run -p controltower-server`: serve on `127.0.0.1:3000`, or `BIND_ADDR` if set
+- `docker build -f server/Dockerfile -t controltower-server .`: build the server image. It listens on `0.0.0.0:3000` and needs `DATABASE_URL`.
 - `cargo clippy --workspace`: lint. Run before committing.
 
 `apps/web` has no tests yet. Run `cargo test --workspace` from `apps/api`.
