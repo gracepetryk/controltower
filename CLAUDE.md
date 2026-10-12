@@ -7,6 +7,11 @@ A 3D flight tracker with two apps:
 
 ## Commands
 
+Run these from the repo root:
+
+- `docker compose up -d db`: start PostGIS on port 5433, so it doesn't conflict with a Postgres on the host's 5432
+- `docker compose up -d --build`: run PostGIS, the server and Caddy, which serves the frontend on `/` and the API on `/api` at `127.0.0.1:8080`
+
 Run these from `apps/web`:
 
 - `npm run dev`: dev server
@@ -15,25 +20,23 @@ Run these from `apps/web`:
 
 Run these from `apps/api`:
 
-- `docker compose up -d`: start PostGIS on port 5433
 - `cargo run -p ingest`: run migrations, then poll every 10 seconds
 - `cargo run --release -p ingest -- import <dir>`: run migrations, then load the positions in a day of adsb.lol globe history from `<dir>` that are within `RADIUS_NM` of the center
 - `cargo run -p controltower-server`: serve on `127.0.0.1:3000`, or `BIND_ADDR` if set
-- `docker build -f server/Dockerfile -t controltower-server .`: build the server image. It listens on `0.0.0.0:3000` and needs `DATABASE_URL`.
 - `cargo clippy --workspace`: lint. Run before committing.
 
 `apps/web` has no tests yet. Run `cargo test --workspace` from `apps/api`.
 
 ## Setup
 
-`apps/web/.env` holds `VITE_MAPBOX_ACCESS_TOKEN` and `API_URL` and `apps/api/.env` holds `DATABASE_URL` (see each `.env.example`). Never commit them. `API_URL` is the API that `npm run dev` and `npm run preview` proxy `/api` to (default `http://127.0.0.1:3000`). The API sends no CORS headers, so the frontend only reaches it through that proxy.
+`apps/web/.env` holds `VITE_MAPBOX_ACCESS_TOKEN` and `API_URL`, `apps/api/.env` holds `DATABASE_URL`, and the root `.env` holds the compose settings `VITE_MAPBOX_ACCESS_TOKEN` and `CADDY_PORT` (see each `.env.example`). Never commit them. `API_URL` is the API that `npm run dev` and `npm run preview` proxy `/api` to (default `http://127.0.0.1:3000`). The API sends no CORS headers, so the frontend only reaches it through that proxy, or through Caddy in compose.
 
 ## Architecture
 
 ### web
 
 - `src/App.tsx` creates the map, adds an `AircraftLayer` and starts an `AircraftFeed`. A requestAnimationFrame loop has the feed draw onto the layer.
-- `src/flight/AircraftFeed.ts` polls `GET /aircraft` (`src/flight/aircraftApi.ts`) for the visible area every 5 s and keeps each aircraft's trace. It draws aircraft as of the server's `now` minus 40 s, so that most have a newer recorded position to interpolate toward, and with `REPLAY_DATE` set it shows that day at the current time of day. Each aircraft's trace is smoothed and converted to scene coordinates once per poll; each frame only slices it to the last 60 s and fades it by age, so trail length shows speed. Aircraft beyond `maxAircraft` are skipped. Polling pauses while the page is hidden and polls right away when it is shown again.
+- `src/flight/AircraftFeed.ts` polls `GET /api/aircraft` (`src/flight/aircraftApi.ts`) for the visible area every 5 s and keeps each aircraft's trace. It draws aircraft as of the server's `now` minus 40 s, so that most have a newer recorded position to interpolate toward, and with `REPLAY_DATE` set it shows that day at the current time of day. Each aircraft's trace is smoothed and converted to scene coordinates once per poll; each frame only slices it to the last 60 s and fades it by age, so trail length shows speed. Aircraft beyond `maxAircraft` are skipped. Polling pauses while the page is hidden and polls right away when it is shown again.
 - `src/flight/flightTrace.ts` converts traces and interpolates them: `positionAt` lerps between recorded positions and dead-reckons past the newest one for up to 30 s. `smoothPath` draws them as a cubic B-spline with the recorded positions as control points, to smooth out ADS-B jitter. The curve starts and ends exactly at the oldest and newest positions but doesn't pass through the others. `clampToGround` keeps aircraft at least 10 ft above the terrain and puts aircraft on the ground at exactly 10 ft. It skips positions above 8,849 m. The feed reapplies it to each aircraft about once a second, spread across frames, since terrain tiles load after the positions do.
 - `src/flight/AircraftLayer.ts` is a Mapbox `CustomLayerInterface` that renders a three.js scene into Mapbox's GL context. Aircraft are added and moved by id with `setAircraft`, up to `maxAircraft`, and each call replaces the aircraft's trail with points from `scenePoint` that end at the aircraft. All planes, all trails and all drop lines are each one instanced draw call:
   - The scene frame is local meters around the layer's origin: x east, y north, z up. `sceneToMercator` maps it into Mercator, and Mapbox's matrix is premultiplied into the camera's projection matrix.
@@ -52,9 +55,14 @@ The crates share no code. Postgres is the only interface between them, and `inge
 - Positions are kept for `RETENTION` (1 day). A second loop in `ingest/src/main.rs` deletes older rows every minute.
 - Migrations are in `migrations/` at the workspace root. `ingest` embeds them with `sqlx::migrate!("../migrations")`. Queries are checked at runtime, so building doesn't need a database.
 - Indexes: GiST on `position`, btree on `(hex, observed_at)` and `(flight, observed_at)`, and BRIN on `observed_at`.
-- `server/src/aircraft.rs` serves `GET /aircraft?bbox=west,south,east,north&trace_seconds=N`. It returns each aircraft whose latest position in the last N seconds is inside `bbox`, with all of its positions from that window, oldest first. `west > east` crosses the antimeridian. `server/src/store.rs` runs the query and groups the rows by `hex`.
+- `server/src/aircraft.rs` serves `GET /api/aircraft?bbox=west,south,east,north&trace_seconds=N`. It returns each aircraft whose latest position in the last N seconds is inside `bbox`, with all of its positions from that window, oldest first. `west > east` crosses the antimeridian. `trace_seconds` is at most 300 and `bbox` at most 10 degrees on each side, since the API is public; `src/App.tsx` trims the visible area to fit. `server/src/store.rs` runs the query and groups the rows by `hex`.
 - When `REPLAY_DATE` (`YYYY-MM-DD`) is set, the server's clock (`server/src/clock.rs`) is the current UTC time of day on that date, so imported history plays back as if it were live.
-- The server documents its routes with aide. Each route is added with `api_route` and a `*_docs` function, and response types derive `schemars::JsonSchema`. The spec is served at `/openapi.json` and a Scalar docs page at `/docs`.
+- The server documents its routes with aide. Each route is added with `api_route` and a `*_docs` function, and response types derive `schemars::JsonSchema`. All routes are nested under `/api`. The spec is served at `/api/openapi.json` and a Scalar docs page at `/api/docs`.
+
+### Deployment
+
+- `compose.yaml` at the repo root runs `db`, `server` (`apps/api/server/Dockerfile`) and `caddy`. It sets the server's `REPLAY_DATE` to 2026-10-10. The `caddy` image (`apps/web/Dockerfile`) builds the frontend into `/srv`, with `VITE_MAPBOX_ACCESS_TOKEN` as a build arg, and the root `Caddyfile` is mounted into it. `ingest` isn't containerized.
+- Caddy listens on plain HTTP on `:8080`, published on `127.0.0.1:${CADDY_PORT:-8080}`. TLS is terminated by a Cloudflare tunnel in front of it. `/api` and `/api/*` are proxied to the server unchanged, the same as the Vite proxy. Everything else is the frontend, with `/assets/*` cached as immutable.
 
 ## Gotchas
 

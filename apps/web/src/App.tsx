@@ -15,14 +15,22 @@ const TRAIL_MS = 60_000
 // Smoothed trails are split into as many points as fit.
 const MAX_TRAIL_POINTS = 256
 
-// The map's visible area, with longitudes wrapped into [-180, 180].
+// The widest and tallest area to request, in degrees. The API rejects areas over 10 degrees; this
+// stays under that so rounding can't push it over.
+const MAX_BOUNDS_DEGREES = 9.9
+
+// The map's visible area, trimmed to `MAX_BOUNDS_DEGREES` around its center, with longitudes
+// wrapped into [-180, 180].
 function visibleBounds(map: mapboxgl.Map): BoundingBox {
   const bounds = map.getBounds()!
-  if (bounds.getEast() - bounds.getWest() >= 360) {
-    return [-180, bounds.getSouth(), 180, bounds.getNorth()]
-  }
+  const center = bounds.getCenter()
+  const half = MAX_BOUNDS_DEGREES / 2
+  const west = Math.max(bounds.getWest(), center.lng - half)
+  const east = Math.min(bounds.getEast(), center.lng + half)
+  const south = Math.max(bounds.getSouth(), center.lat - half)
+  const north = Math.min(bounds.getNorth(), center.lat + half)
   const wrap = (lng: number) => ((((lng + 180) % 360) + 360) % 360) - 180
-  return [wrap(bounds.getWest()), bounds.getSouth(), wrap(bounds.getEast()), bounds.getNorth()]
+  return [wrap(west), south, wrap(east), north]
 }
 
 function App() {

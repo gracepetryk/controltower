@@ -15,12 +15,15 @@ use crate::{
 };
 
 /// The longest trace a client can request.
-const MAX_TRACE_SECONDS: u32 = 60 * 60;
+const MAX_TRACE_SECONDS: u32 = 5 * 60;
+/// The widest and tallest `bbox` a client can request, in degrees.
+const MAX_BBOX_DEGREES: f64 = 10.0;
 
 #[derive(Deserialize, JsonSchema)]
 pub struct Params {
     /// `west,south,east,north` in degrees. Longitudes are in [-180, 180] and
-    /// latitudes in [-90, 90]. `west > east` crosses the antimeridian.
+    /// latitudes in [-90, 90]. `west > east` crosses the antimeridian. It
+    /// can span at most 10 degrees of longitude and of latitude.
     #[schemars(example = "-123.5,46.5,-121,48.5")]
     bbox: String,
     /// How many seconds of positions to return.
@@ -36,7 +39,7 @@ pub struct AircraftResponse {
     aircraft: Vec<Aircraft>,
 }
 
-/// `GET /aircraft?bbox=west,south,east,north&trace_seconds=N`
+/// `GET /api/aircraft?bbox=west,south,east,north&trace_seconds=N`
 pub async fn list(
     State(pool): State<PgPool>,
     State(clock): State<Clock>,
@@ -73,7 +76,8 @@ fn parse_bbox(bbox: &str) -> Result<BoundingBox, ApiError> {
     let invalid = || {
         ApiError::BadRequest(format!(
             "bbox must be `west,south,east,north` with longitudes in [-180, 180], \
-             latitudes in [-90, 90] and south <= north; got `{bbox}`"
+             latitudes in [-90, 90], south <= north and each side at most \
+             {MAX_BBOX_DEGREES} degrees; got `{bbox}`"
         ))
     };
     let values = bbox
@@ -86,11 +90,18 @@ fn parse_bbox(bbox: &str) -> Result<BoundingBox, ApiError> {
     };
     let longitude = -180.0..=180.0;
     let latitude = -90.0..=90.0;
+    let width = if west <= east {
+        east - west
+    } else {
+        east + 360.0 - west
+    };
     if !(longitude.contains(&west)
         && longitude.contains(&east)
         && latitude.contains(&south)
         && latitude.contains(&north)
-        && south <= north)
+        && south <= north
+        && width <= MAX_BBOX_DEGREES
+        && north - south <= MAX_BBOX_DEGREES)
     {
         return Err(invalid());
     }
@@ -116,8 +127,13 @@ mod tests {
     }
 
     #[test]
+    fn accepts_largest_bbox() {
+        assert!(parse_bbox("-130,40,-120,50").is_ok());
+    }
+
+    #[test]
     fn accepts_antimeridian_crossing() {
-        assert!(parse_bbox("170,-10,-170,10").is_ok());
+        assert!(parse_bbox("175,-5,-175,5").is_ok());
     }
 
     #[test]
@@ -131,6 +147,9 @@ mod tests {
             "-181,0,0,1",
             "0,-91,1,0",
             "0,10,1,5",
+            "-130,40,-119.9,41",
+            "0,40,1,50.1",
+            "170,0,-179.9,1",
         ] {
             assert!(parse_bbox(bbox).is_err(), "accepted `{bbox}`");
         }
