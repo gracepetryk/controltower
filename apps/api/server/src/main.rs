@@ -69,16 +69,18 @@ async fn main() -> anyhow::Result<()> {
         },
         ..OpenApi::default()
     };
-    let app = ApiRouter::new()
+    let routes = ApiRouter::new()
         .api_route("/health", get_with(health, health_docs))
         .api_route("/aircraft", get_with(aircraft::list, aircraft::list_docs))
         .route("/openapi.json", get(openapi_json))
         .route(
             "/docs",
-            Scalar::new("/openapi.json")
+            Scalar::new("/api/openapi.json")
                 .with_title("controltower API")
                 .axum_route(),
-        )
+        );
+    let app = ApiRouter::new()
+        .nest("/api", routes)
         .finish_api(&mut api)
         .layer(Extension(Arc::new(api)))
         .with_state(AppState { pool, clock });

@@ -1,4 +1,4 @@
-// Client for the controltower API's `GET /aircraft`, served under /api by the dev server's proxy.
+// Client for the controltower API's `GET /api/aircraft`, reached through the Vite proxy or Caddy.
 
 export interface TracePoint {
   // Milliseconds since the Unix epoch.
@@ -43,7 +43,7 @@ export async function fetchAircraft(
   const params = new URLSearchParams({ bbox: bbox.join(','), trace_seconds: String(traceSeconds) });
   const response = await fetch(`/api/aircraft?${params}`, { signal });
   if (!response.ok) {
-    throw new Error(`GET /aircraft failed with ${response.status}: ${await response.text()}`);
+    throw new Error(`GET /api/aircraft failed with ${response.status}: ${await response.text()}`);
   }
   return response.json();
 }

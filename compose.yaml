@@ -1,0 +1,39 @@
+services:
+  db:
+    image: postgis/postgis:17-3.5
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: controltower
+      POSTGRES_PASSWORD: controltower
+      POSTGRES_DB: controltower
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - db:/var/lib/postgresql/data
+
+  server:
+    build:
+      context: apps/api
+      dockerfile: server/Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://controltower:controltower@db:5432/controltower
+      REPLAY_DATE: "2026-10-10"
+    depends_on:
+      - db
+
+  caddy:
+    build:
+      context: apps/web
+      args:
+        VITE_MAPBOX_ACCESS_TOKEN: ${VITE_MAPBOX_ACCESS_TOKEN:?set VITE_MAPBOX_ACCESS_TOKEN in .env}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${CADDY_PORT:-8080}:8080"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      - server
+
+volumes:
+  db:
