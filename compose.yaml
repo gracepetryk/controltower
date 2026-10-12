@@ -4,7 +4,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: controltower
-      POSTGRES_PASSWORD: controltower
+      POSTGRES_PASSWORD: ${PG_PASSWORD:?set PG_PASSWORD in .env}
       POSTGRES_DB: controltower
     ports:
       - "127.0.0.1:5433:5432"
@@ -19,7 +19,7 @@ services:
       dockerfile: server/Dockerfile
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgres://controltower:controltower@db:5432/controltower
+      DATABASE_URL: postgres://controltower:${PG_PASSWORD}@db:5432/controltower
       REPLAY_DATE: "2026-10-10"
     depends_on:
       - db
