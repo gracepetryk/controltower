@@ -1,4 +1,4 @@
-# controltower
+# [controltower](https://controltower.gracepetryk.com)
 
 A 3D flight tracker for the Seattle area. It records ADS-B positions from [adsb.lol](https://adsb.lol) and draws each aircraft as a true-scale model on a Mapbox map, with a fading trail of its last 60 seconds and a line down to the ground.
 
