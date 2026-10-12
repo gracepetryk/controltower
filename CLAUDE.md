@@ -10,7 +10,7 @@ A 3D flight tracker with two apps:
 Run these from the repo root:
 
 - `docker compose up -d db`: start PostGIS on port 5433, so it doesn't conflict with a Postgres on the host's 5432
-- `docker compose up -d --build`: run PostGIS, the server and Caddy, which serves the frontend on `/` and the API on `/api` at `127.0.0.1:8080`
+- `docker compose up -d --build`: run PostGIS, the server, Caddy, which serves the frontend on `/` and the API on `/api`, and cloudflared
 
 Run these from `apps/web`:
 
@@ -29,7 +29,7 @@ Run these from `apps/api`:
 
 ## Setup
 
-`apps/web/.env` holds `VITE_MAPBOX_ACCESS_TOKEN` and `API_URL`, `apps/api/.env` holds `DATABASE_URL`, and the root `.env` holds the compose settings `VITE_MAPBOX_ACCESS_TOKEN` and `CADDY_PORT` (see each `.env.example`). Never commit them. `API_URL` is the API that `npm run dev` and `npm run preview` proxy `/api` to (default `http://127.0.0.1:3000`). The API sends no CORS headers, so the frontend only reaches it through that proxy, or through Caddy in compose.
+`apps/web/.env` holds `VITE_MAPBOX_ACCESS_TOKEN` and `API_URL`, `apps/api/.env` holds `DATABASE_URL`, and the root `.env` holds the compose settings `VITE_MAPBOX_ACCESS_TOKEN` and `TUNNEL_TOKEN` (see each `.env.example`). Every compose command needs `VITE_MAPBOX_ACCESS_TOKEN` and `TUNNEL_TOKEN` set, even `docker compose up -d db`. Never commit them. `API_URL` is the API that `npm run dev` and `npm run preview` proxy `/api` to (default `http://127.0.0.1:3000`). The API sends no CORS headers, so the frontend only reaches it through that proxy, or through Caddy in compose.
 
 ## Architecture
 
@@ -61,8 +61,8 @@ The crates share no code. Postgres is the only interface between them, and `inge
 
 ### Deployment
 
-- `compose.yaml` at the repo root runs `db`, `server` (`apps/api/server/Dockerfile`) and `caddy`. It sets the server's `REPLAY_DATE` to 2026-10-10. The `caddy` image (`apps/web/Dockerfile`) builds the frontend into `/srv`, with `VITE_MAPBOX_ACCESS_TOKEN` as a build arg, and the root `Caddyfile` is mounted into it. `ingest` isn't containerized.
-- Caddy listens on plain HTTP on `:8080`, published on `127.0.0.1:${CADDY_PORT:-8080}`. TLS is terminated by a Cloudflare tunnel in front of it. `/api` and `/api/*` are proxied to the server unchanged, the same as the Vite proxy. Everything else is the frontend, with `/assets/*` cached as immutable.
+- `compose.yaml` at the repo root runs `db`, `server` (`apps/api/server/Dockerfile`), `caddy` and `cloudflared`. They share the `internal` network, which has no route out and, with `inhibit_ipv4`, no host address, so its containers can't reach the host's services either. Only `cloudflared` is also on `internet`. `db` is also on `db-host`, because Docker only publishes ports from containers on a non-internal network, and `ingest` reaches it from the host on 5433. It sets the server's `REPLAY_DATE` to 2026-10-10. The `caddy` image (`apps/web/Dockerfile`) builds the frontend into `/srv`, with `VITE_MAPBOX_ACCESS_TOKEN` as a build arg, and the root `Caddyfile` is mounted into it. `ingest` isn't containerized.
+- Caddy listens on plain HTTP on `:8080` and isn't published on the host, so the tunnel is the only way in. TLS is terminated by the Cloudflare tunnel that `cloudflared` runs with `TUNNEL_TOKEN`. The tunnel is configured in the Cloudflare dashboard, with its public hostname pointing at `http://caddy:8080`. `/api` and `/api/*` are proxied to the server unchanged, the same as the Vite proxy. Everything else is the frontend, with `/assets/*` cached as immutable.
 
 ## Gotchas
 

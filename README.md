@@ -47,11 +47,11 @@ Don't run the poller while replaying: it deletes positions older than a day.
 To run the frontend and server in Docker behind Caddy, from the repo root:
 
 ```sh
-cp .env.example .env        # set VITE_MAPBOX_ACCESS_TOKEN
+cp .env.example .env        # set VITE_MAPBOX_ACCESS_TOKEN and TUNNEL_TOKEN
 docker compose up -d --build
 ```
 
-Caddy serves the frontend on `/` and the API on `/api` over plain HTTP at `127.0.0.1:8080` (`CADDY_PORT`). It's meant to sit behind a Cloudflare tunnel, which terminates TLS.
+Caddy serves the frontend on `/` and the API on `/api` over plain HTTP. It isn't published on the host: `cloudflared` connects it to a [Cloudflare tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/), which terminates TLS. Create a remotely-managed tunnel in the Cloudflare dashboard, point its public hostname at `http://caddy:8080`, and put its token in `TUNNEL_TOKEN`.
 
 The server in `compose.yaml` replays 2026-10-10, so import that day first as above, and don't run the poller. To show live traffic instead, remove `REPLAY_DATE` from `compose.yaml` and run the poller on the host:
 
