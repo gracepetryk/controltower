@@ -3,7 +3,7 @@ mod clock;
 mod error;
 mod store;
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use aide::{
     axum::{ApiRouter, IntoApiResponse, routing::get_with},
@@ -57,9 +57,9 @@ async fn main() -> anyhow::Result<()> {
     let database_url = std::env::var("DATABASE_URL").context("DATABASE_URL must be set")?;
     let pool = PgPoolOptions::new()
         .max_connections(8)
-        .connect(&database_url)
-        .await
-        .context("connecting to the database")?;
+        .acquire_timeout(Duration::from_millis(1000))
+        .connect_lazy(&database_url)
+        .context("Unable to create Postgres connection pool")?;
 
     let mut api = OpenApi {
         info: Info {
