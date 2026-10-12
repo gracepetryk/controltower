@@ -3,7 +3,7 @@
 A 3D flight tracker with two apps:
 
 - `apps/web`: the frontend, built with Vite, React 19, TypeScript, mapbox-gl 3, and three.js.
-- `apps/api`: a Cargo workspace with two binaries. `ingest` polls adsb.lol and stores aircraft positions in PostGIS. `server` is an axum web server that serves flight data to the frontend.
+- `apps/api`: a Cargo workspace with two binaries. `ingest` polls adsb.lol and stores aircraft positions in PostGIS. `controltower-server` (in `server/`) is an axum web server that serves flight data to the frontend.
 
 ## Commands
 
@@ -18,7 +18,7 @@ Run these from `apps/api`:
 - `docker compose up -d`: start PostGIS on port 5433
 - `cargo run -p ingest`: run migrations, then poll every 10 seconds
 - `cargo run --release -p ingest -- import <dir>`: run migrations, then load the positions in a day of adsb.lol globe history from `<dir>` that are within `RADIUS_NM` of the center
-- `cargo run -p server`: serve on `127.0.0.1:3000`
+- `cargo run -p controltower-server`: serve on `127.0.0.1:3000`
 - `cargo clippy --workspace`: lint. Run before committing.
 
 `apps/web` has no tests yet. Run `cargo test --workspace` from `apps/api`.

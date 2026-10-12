@@ -22,9 +22,9 @@ You need Docker, Rust, Node and a [Mapbox access token](https://account.mapbox.c
 # API
 cd apps/api
 cp .env.example .env
-docker compose up -d        # PostGIS on port 5433
-cargo run -p ingest         # start recording positions
-cargo run -p server         # serve on 127.0.0.1:3000
+docker compose up -d             # PostGIS on port 5433
+cargo run -p ingest              # start recording positions
+cargo run -p controltower-server # serve on 127.0.0.1:3000
 
 # Web
 cd apps/web
@@ -39,7 +39,7 @@ To replay a past day instead of live traffic, import it and set `REPLAY_DATE` fo
 
 ```sh
 cargo run --release -p ingest -- import <globe_history_dir>
-REPLAY_DATE=2026-10-10 cargo run -p server
+REPLAY_DATE=2026-10-10 cargo run -p controltower-server
 ```
 
 Don't run the poller while replaying: it deletes positions older than a day.
