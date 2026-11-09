@@ -6,7 +6,7 @@ import 'mapbox-gl/dist/mapbox-gl.css'
 import './App.css'
 import { AircraftFeed } from './flight/AircraftFeed'
 import { AircraftLayer } from './flight/AircraftLayer'
-import type { BoundingBox } from './flight/aircraftApi'
+import { type BoundingBox, wrapLongitude } from './flight/aircraftApi'
 
 const accessToken = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN
 const center:[number, number] = [-122.30880, 47.45020]
@@ -15,14 +15,36 @@ const TRAIL_MS = 60_000
 // Smoothed trails are split into as many points as fit.
 const MAX_TRAIL_POINTS = 256
 
-// The map's visible area, with longitudes wrapped into [-180, 180].
+// Aircraft are fetched no farther than this from the map's center. A tilted camera sees toward the
+// horizon, and this keeps the request near the area the camera is looking at.
+const MAX_VIEW_DISTANCE_M = 120_000
+const METERS_PER_DEGREE = 111_320
+
+// The map's visible area, cut off at `MAX_VIEW_DISTANCE_M` from the center, with longitudes wrapped
+// into [-180, 180].
 function visibleBounds(map: mapboxgl.Map): BoundingBox {
-  const bounds = map.getBounds()!
-  if (bounds.getEast() - bounds.getWest() >= 360) {
-    return [-180, bounds.getSouth(), 180, bounds.getNorth()]
-  }
-  const wrap = (lng: number) => ((((lng + 180) % 360) + 360) % 360) - 180
-  return [wrap(bounds.getWest()), bounds.getSouth(), wrap(bounds.getEast()), bounds.getNorth()]
+  const { width, height } = map.getCanvas().getBoundingClientRect()
+  const center = map.getCenter()
+  const metersPerDegreeLng = METERS_PER_DEGREE * Math.cos((center.lat * Math.PI) / 180)
+  // Offsets in meters east and north of the center, of points around the edge of the screen.
+  const offsets = [0, 0.5, 1]
+    .flatMap((x) => [0, 0.5, 1].map((y) => [x * width, y * height] as [number, number]))
+    .filter(([x, y]) => x !== width / 2 || y !== height / 2)
+    .map((point) => {
+      const { lng, lat } = map.unproject(point)
+      const east = wrapLongitude(lng - center.lng) * metersPerDegreeLng
+      const north = (lat - center.lat) * METERS_PER_DEGREE
+      const scale = Math.min(1, MAX_VIEW_DISTANCE_M / Math.hypot(east, north))
+      return [east * scale, north * scale]
+    })
+  const easts = offsets.map(([east]) => east)
+  const norths = offsets.map(([, north]) => north)
+  return [
+    wrapLongitude(center.lng + Math.min(...easts) / metersPerDegreeLng),
+    Math.max(center.lat + Math.min(...norths) / METERS_PER_DEGREE, -90),
+    wrapLongitude(center.lng + Math.max(...easts) / metersPerDegreeLng),
+    Math.min(center.lat + Math.max(...norths) / METERS_PER_DEGREE, 90),
+  ]
 }
 
 function App() {

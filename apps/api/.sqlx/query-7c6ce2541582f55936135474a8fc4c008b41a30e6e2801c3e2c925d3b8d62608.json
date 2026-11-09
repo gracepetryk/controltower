@@ -1,0 +1,123 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            aircraft_address, observed_at, flight, registration, aircraft_type, category,\n            squawk, ST_Y(position::geometry) AS \"lat!\", ST_X(position::geometry) AS \"lon!\",\n            on_ground, alt_baro, alt_geom, ground_speed, track, true_heading,\n            baro_rate, geom_rate\n        FROM aircraft_positions\n        WHERE observed_at BETWEEN $5 AND $6\n          -- Geography edges take the shorter way around, so west > east\n          -- crosses the antimeridian.\n          AND ST_Intersects(position, ST_MakeEnvelope($1, $2, $3, $4, 4326)::geography)\n        ORDER BY aircraft_address, observed_at\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "aircraft_address",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "observed_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 2,
+        "name": "flight",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "registration",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "aircraft_type",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "category",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "squawk",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "lat!",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 8,
+        "name": "lon!",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 9,
+        "name": "on_ground",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 10,
+        "name": "alt_baro",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 11,
+        "name": "alt_geom",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 12,
+        "name": "ground_speed",
+        "type_info": "Float4"
+      },
+      {
+        "ordinal": 13,
+        "name": "track",
+        "type_info": "Float4"
+      },
+      {
+        "ordinal": 14,
+        "name": "true_heading",
+        "type_info": "Float4"
+      },
+      {
+        "ordinal": 15,
+        "name": "baro_rate",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 16,
+        "name": "geom_rate",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Float8",
+        "Float8",
+        "Float8",
+        "Float8",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      null,
+      null,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "7c6ce2541582f55936135474a8fc4c008b41a30e6e2801c3e2c925d3b8d62608"
+}

@@ -75,7 +75,7 @@ impl Trace {
     fn into_positions(self) -> anyhow::Result<Vec<Position>> {
         let start = DateTime::from_timestamp_millis((self.timestamp * 1000.0).round() as i64)
             .with_context(|| format!("`timestamp` out of range: {}", self.timestamp))?;
-        let hex = self.icao;
+        let aircraft_address = self.icao;
         let mut flight = None;
         let mut category = None;
         let mut squawk = None;
@@ -116,7 +116,7 @@ impl Trace {
             };
             positions.push(Position {
                 observed_at,
-                hex: hex.clone(),
+                aircraft_address: aircraft_address.clone(),
                 flight: flight.clone(),
                 registration: self.r.clone(),
                 aircraft_type: self.t.clone(),
@@ -214,7 +214,7 @@ mod tests {
             panic!("expected one position");
         };
         assert_eq!(position.observed_at.timestamp_millis(), 1_791_590_401_500);
-        assert_eq!(position.hex, "ab24b7");
+        assert_eq!(position.aircraft_address, "ab24b7");
         assert_eq!(position.registration.as_deref(), Some("N817PW"));
         assert_eq!(position.aircraft_type.as_deref(), Some("B350"));
         assert_eq!(position.source, "adsb_icao");

@@ -17,7 +17,7 @@ export interface TracePoint {
 }
 
 export interface ApiAircraft {
-  hex: string;
+  aircraft_address: string;
   flight: string | null;
   // Oldest first.
   trace: TracePoint[];
@@ -33,8 +33,37 @@ export interface AircraftResponse {
 // [west, south, east, north] in degrees. `west > east` crosses the antimeridian.
 export type BoundingBox = [number, number, number, number];
 
-// Fetches the aircraft whose latest position in the last `traceSeconds` is inside `bbox`, each with
-// its positions from that window.
+const METERS_PER_DEGREE_LATITUDE = 111_320;
+
+// Wraps a longitude into [-180, 180).
+export function wrapLongitude(lng: number): number {
+  return ((((lng + 180) % 360) + 360) % 360) - 180;
+}
+
+// Degrees of longitude `bbox` spans, in [0, 360].
+function lngSpan([west, , east]: BoundingBox): number {
+  return west <= east ? east - west : east - west + 360;
+}
+
+// `bbox` grown by `meters` on every side. Longitudes are padded by the most degrees `meters` spans
+// within the box's latitudes.
+export function padBoundingBox(bbox: BoundingBox, meters: number): BoundingBox {
+  const [west, south, east, north] = bbox;
+  const latPad = meters / METERS_PER_DEGREE_LATITUDE;
+  const padSouth = Math.max(south - latPad, -90);
+  const padNorth = Math.min(north + latPad, 90);
+  const maxAbsLat = Math.min(Math.max(Math.abs(padSouth), Math.abs(padNorth)), 89);
+  const lngPad = latPad / Math.cos((maxAbsLat * Math.PI) / 180);
+  if (lngSpan(bbox) + 2 * lngPad >= 360) {
+    return [-180, padSouth, 180, padNorth];
+  }
+  return [wrapLongitude(west - lngPad), padSouth, wrapLongitude(east + lngPad), padNorth];
+}
+
+// Thrown by `fetchAircraft` when the server won't search an area as large as `bbox`.
+export class AreaTooLargeError extends Error {}
+
+// Fetches the positions in the last `traceSeconds` inside `bbox`, grouped by aircraft.
 export async function fetchAircraft(
   bbox: BoundingBox,
   traceSeconds: number,
@@ -42,6 +71,9 @@ export async function fetchAircraft(
 ): Promise<AircraftResponse> {
   const params = new URLSearchParams({ bbox: bbox.join(','), trace_seconds: String(traceSeconds) });
   const response = await fetch(`/api/aircraft?${params}`, { signal });
+  if (response.status === 413) {
+    throw new AreaTooLargeError(await response.text());
+  }
   if (!response.ok) {
     throw new Error(`GET /aircraft failed with ${response.status}: ${await response.text()}`);
   }

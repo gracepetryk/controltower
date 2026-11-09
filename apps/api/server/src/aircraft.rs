@@ -20,7 +20,8 @@ const MAX_TRACE_SECONDS: u32 = 60 * 60;
 #[derive(Deserialize, JsonSchema)]
 pub struct Params {
     /// `west,south,east,north` in degrees. Longitudes are in [-180, 180] and
-    /// latitudes in [-90, 90]. `west > east` crosses the antimeridian.
+    /// latitudes in [-90, 90]. `west > east` crosses the antimeridian. At most
+    /// 5° of longitude and of latitude.
     #[schemars(example = "-123.5,46.5,-121,48.5")]
     bbox: String,
     /// How many seconds of positions to return.
@@ -60,9 +61,8 @@ pub async fn list(
 pub fn list_docs(op: TransformOperation) -> TransformOperation {
     op.summary("Aircraft in an area, with traces")
         .description(
-            "Returns the aircraft whose latest position in the last `trace_seconds` is inside \
-         `bbox`, each with all of its positions from that window, oldest first. Traces may \
-         extend outside `bbox`.",
+            "Returns the positions in the last `trace_seconds` inside `bbox`, grouped by \
+         aircraft, oldest first. `bbox` can span at most 5° of longitude and of latitude, or the response is 413.",
         )
         .response_with::<200, Json<AircraftResponse>, _>(|res| {
             res.description("The matching aircraft.")

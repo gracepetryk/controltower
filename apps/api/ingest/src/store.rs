@@ -4,7 +4,7 @@ use sqlx::PgPool;
 /// One position report, in the units of `aircraft_positions`.
 pub struct Position {
     pub observed_at: DateTime<Utc>,
-    pub hex: String,
+    pub aircraft_address: String,
     pub flight: Option<String>,
     pub registration: Option<String>,
     pub aircraft_type: Option<String>,
@@ -29,7 +29,7 @@ pub async fn insert_positions(pool: &PgPool, positions: Vec<Position>) -> sqlx::
     let mut rows = Rows::default();
     for position in positions {
         rows.observed_at.push(position.observed_at);
-        rows.hex.push(position.hex);
+        rows.aircraft_address.push(position.aircraft_address);
         rows.flight.push(position.flight);
         rows.registration.push(position.registration);
         rows.aircraft_type.push(position.aircraft_type);
@@ -47,19 +47,19 @@ pub async fn insert_positions(pool: &PgPool, positions: Vec<Position>) -> sqlx::
         rows.geom_rate.push(position.geom_rate);
         rows.squawk.push(position.squawk);
     }
-    if rows.hex.is_empty() {
+    if rows.aircraft_address.is_empty() {
         return Ok(0);
     }
 
     let result = sqlx::query(
         r#"
         INSERT INTO aircraft_positions (
-            observed_at, hex, flight, registration, aircraft_type, category, source,
+            observed_at, aircraft_address, flight, registration, aircraft_type, category, source,
             position, on_ground, alt_baro, alt_geom, ground_speed, track, true_heading,
             baro_rate, geom_rate, squawk
         )
         SELECT
-            observed_at, hex, flight, registration, aircraft_type, category, source,
+            observed_at, aircraft_address, flight, registration, aircraft_type, category, source,
             ST_SetSRID(ST_MakePoint(lon, lat), 4326)::geography, on_ground, alt_baro,
             alt_geom, ground_speed, track, true_heading, baro_rate, geom_rate, squawk
         FROM UNNEST(
@@ -68,15 +68,15 @@ pub async fn insert_positions(pool: &PgPool, positions: Vec<Position>) -> sqlx::
             $12::integer[], $13::real[], $14::real[], $15::real[], $16::integer[],
             $17::integer[], $18::text[]
         ) AS rows (
-            observed_at, hex, flight, registration, aircraft_type, category, source,
+            observed_at, aircraft_address, flight, registration, aircraft_type, category, source,
             lat, lon, on_ground, alt_baro, alt_geom, ground_speed, track, true_heading,
             baro_rate, geom_rate, squawk
         )
-        ON CONFLICT (hex, observed_at) DO NOTHING
+        ON CONFLICT (aircraft_address, observed_at) DO NOTHING
         "#,
     )
     .bind(rows.observed_at)
-    .bind(rows.hex)
+    .bind(rows.aircraft_address)
     .bind(rows.flight)
     .bind(rows.registration)
     .bind(rows.aircraft_type)
@@ -102,7 +102,7 @@ pub async fn insert_positions(pool: &PgPool, positions: Vec<Position>) -> sqlx::
 #[derive(Default)]
 struct Rows {
     observed_at: Vec<DateTime<Utc>>,
-    hex: Vec<String>,
+    aircraft_address: Vec<String>,
     flight: Vec<Option<String>>,
     registration: Vec<Option<String>>,
     aircraft_type: Vec<Option<String>>,

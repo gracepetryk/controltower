@@ -8,9 +8,14 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
+use crate::store::{AircraftInError, MAX_AREA_DEGREES};
+
 pub enum ApiError {
     /// The request was invalid. The message is returned to the client.
     BadRequest(String),
+    /// The requested area is larger than the server searches. The message is
+    /// returned to the client.
+    AreaTooLarge(String),
     /// Something failed on our side. It is logged, and the client gets a
     /// generic message.
     Internal(anyhow::Error),
@@ -20,6 +25,7 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         match self {
             Self::BadRequest(message) => (StatusCode::BAD_REQUEST, message).into_response(),
+            Self::AreaTooLarge(message) => (StatusCode::PAYLOAD_TOO_LARGE, message).into_response(),
             Self::Internal(err) => {
                 tracing::error!("{err:#}");
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response()
@@ -34,7 +40,18 @@ impl From<sqlx::Error> for ApiError {
     }
 }
 
-/// Documents both variants as plain-text responses.
+impl From<AircraftInError> for ApiError {
+    fn from(err: AircraftInError) -> Self {
+        match err {
+            AircraftInError::AreaTooLarge { lng_span, lat_span } => Self::AreaTooLarge(format!(
+                "bbox spans {lng_span}° of longitude and {lat_span}° of latitude; the most is {MAX_AREA_DEGREES}° of each"
+            )),
+            AircraftInError::Database(err) => err.into(),
+        }
+    }
+}
+
+/// Documents every variant as a plain-text response.
 impl OperationOutput for ApiError {
     type Inner = String;
 
@@ -54,6 +71,13 @@ impl OperationOutput for ApiError {
                 Some(400),
                 ApiResponse {
                     description: "The request is invalid. The body says why.".into(),
+                    ..response.clone()
+                },
+            ),
+            (
+                Some(413),
+                ApiResponse {
+                    description: "The requested area is too large. The body says why.".into(),
                     ..response.clone()
                 },
             ),

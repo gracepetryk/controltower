@@ -1,7 +1,7 @@
 import type * as THREE from 'three';
 
 import type { AircraftLayer } from './AircraftLayer';
-import { type BoundingBox, fetchAircraft } from './aircraftApi';
+import { AreaTooLargeError, type BoundingBox, fetchAircraft, padBoundingBox } from './aircraftApi';
 import {
   clampToGround,
   positionAt,
@@ -20,6 +20,9 @@ const MAX_CLOCK_DRIFT_MS = 1_000;
 // Each aircraft's altitudes are clamped to the terrain this often, since terrain loads and sharpens
 // after the positions arrive. The work is spread across frames.
 const GROUND_CLAMP_INTERVAL_MS = 1_000;
+// Faster than airliners fly over the ground, even with a strong tailwind. The fetched area is padded
+// by how far this goes in the trace, so trails and interpolation don't stop at the edge of the view.
+const MAX_GROUND_SPEED_MPS = 350;
 
 interface AircraftFeedOptions {
   // How far back each trail reaches.
@@ -52,6 +55,8 @@ export class AircraftFeed {
   private groundClampCursor = 0;
   private lastDrawMs: number | null = null;
   private warnedFull = false;
+  // The last area the server refused as too large.
+  private tooLargeBounds: BoundingBox | null = null;
 
   constructor(options: AircraftFeedOptions) {
     this.options = options;
@@ -76,30 +81,30 @@ export class AircraftFeed {
     this.clampSomeToGround();
     const timeMs = Date.now() + this.clockOffsetMs - DISPLAY_DELAY_MS;
     const positions = new Map<string, ReturnType<typeof positionAt>>();
-    for (const [hex, { positions: trace }] of this.aircraft) {
-      positions.set(hex, positionAt(trace, timeMs));
+    for (const [address, { positions: trace }] of this.aircraft) {
+      positions.set(address, positionAt(trace, timeMs));
     }
     // Removing first frees room for the aircraft that are added.
-    for (const hex of layer.aircraftIds()) {
-      if (!positions.get(hex)) {
-        layer.removeAircraft(hex);
+    for (const address of layer.aircraftIds()) {
+      if (!positions.get(address)) {
+        layer.removeAircraft(address);
       }
     }
-    for (const [hex, position] of positions) {
+    for (const [address, position] of positions) {
       if (!position) {
         continue;
       }
-      if (!layer.hasAircraft(hex) && layer.aircraftCount >= layer.maxAircraft) {
+      if (!layer.hasAircraft(address) && layer.aircraftCount >= layer.maxAircraft) {
         if (!this.warnedFull) {
           console.warn(`More than ${layer.maxAircraft} aircraft in view; skipping the rest`);
           this.warnedFull = true;
         }
         continue;
       }
-      const aircraft = this.aircraft.get(hex)!;
+      const aircraft = this.aircraft.get(address)!;
       aircraft.path ??= this.buildPath(aircraft.positions, layer);
       const { points, fades } = this.trailAt(aircraft.path, timeMs);
-      layer.setAircraft(hex, position, points, fades);
+      layer.setAircraft(address, position, points, fades);
     }
   }
 
@@ -173,34 +178,60 @@ export class AircraftFeed {
     if (this.polling || document.hidden || this.abort.signal.aborted) {
       return;
     }
+    // The trace has to reach back to the oldest trail point at the delayed draw time.
+    const traceSeconds = Math.ceil((this.options.trailMs + DISPLAY_DELAY_MS + POLL_INTERVAL_MS) / 1000);
+    const bounds = padBoundingBox(this.options.bounds(), MAX_GROUND_SPEED_MPS * traceSeconds);
+    // The server already refused this area, so it isn't requested again until the view changes.
+    if (this.tooLargeBounds && sameBounds(bounds, this.tooLargeBounds)) {
+      this.schedulePoll();
+      return;
+    }
     this.polling = true;
     try {
-      // The trace has to reach back to the oldest trail point at the delayed draw time.
-      const traceSeconds = Math.ceil((this.options.trailMs + DISPLAY_DELAY_MS + POLL_INTERVAL_MS) / 1000);
-      const requestedMs = Date.now();
-      const response = await fetchAircraft(this.options.bounds(), traceSeconds, this.abort.signal);
-      // The server read its clock about halfway through the request.
-      const offsetMs = response.now - (requestedMs + Date.now()) / 2;
-      if (this.clockOffsetMs === null || Math.abs(offsetMs - this.clockOffsetMs) > MAX_CLOCK_DRIFT_MS) {
-        this.clockOffsetMs = offsetMs;
-      }
-      this.aircraft = new Map(
-        response.aircraft.map(({ hex, trace }) => [hex, { positions: toTimedPositions(trace), path: null }]),
-      );
-      for (const aircraft of this.aircraft.values()) {
-        clampToGround(aircraft.positions, this.options.groundElevation);
-      }
+      await this.fetchAircraft(bounds, traceSeconds);
+      this.tooLargeBounds = null;
     } catch (error) {
-      if (!this.abort.signal.aborted) {
+      if (error instanceof AreaTooLargeError) {
+        // Zoomed out too far for the server, so no aircraft are shown.
+        this.tooLargeBounds = bounds;
+        this.aircraft = new Map();
+      } else if (!this.abort.signal.aborted) {
         console.error('Polling aircraft failed; retrying', error);
       }
     } finally {
       this.polling = false;
     }
+    this.schedulePoll();
+  }
+
+  private schedulePoll() {
     if (!this.abort.signal.aborted) {
       this.pollTimer = window.setTimeout(() => void this.poll(), POLL_INTERVAL_MS);
     }
   }
+
+  private async fetchAircraft(bounds: BoundingBox, traceSeconds: number) {
+    const requestedMs = Date.now();
+    const response = await fetchAircraft(bounds, traceSeconds, this.abort.signal);
+    // The server read its clock about halfway through the request.
+    const offsetMs = response.now - (requestedMs + Date.now()) / 2;
+    if (this.clockOffsetMs === null || Math.abs(offsetMs - this.clockOffsetMs) > MAX_CLOCK_DRIFT_MS) {
+      this.clockOffsetMs = offsetMs;
+    }
+    this.aircraft = new Map(
+      response.aircraft.map(({ aircraft_address: address, trace }) => [
+        address,
+        { positions: toTimedPositions(trace), path: null },
+      ]),
+    );
+    for (const aircraft of this.aircraft.values()) {
+      clampToGround(aircraft.positions, this.options.groundElevation);
+    }
+  }
+}
+
+function sameBounds(a: BoundingBox, b: BoundingBox): boolean {
+  return a.every((value, i) => value === b[i]);
 }
 
 // The index of the first of `sorted` that is greater than `value`, or `sorted.length` if none is.

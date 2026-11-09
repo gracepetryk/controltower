@@ -12,11 +12,47 @@ pub struct BoundingBox {
     pub north: f64,
 }
 
+impl BoundingBox {
+    /// Degrees of longitude the box spans, in [0, 360].
+    fn lng_span(&self) -> f64 {
+        if self.west <= self.east {
+            self.east - self.west
+        } else {
+            self.east - self.west + 360.0
+        }
+    }
+
+    /// Degrees of latitude the box spans.
+    fn lat_span(&self) -> f64 {
+        self.north - self.south
+    }
+}
+
+/// The most degrees of longitude or latitude `aircraft_in` searches, about a
+/// metro area plus its surroundings. Geography edges are great circles, which
+/// bow toward the pole by a few km at this span.
+pub const MAX_AREA_DEGREES: f64 = 5.0;
+
+pub enum AircraftInError {
+    /// `area` spans more than `MAX_AREA_DEGREES` of longitude or latitude.
+    AreaTooLarge {
+        lng_span: f64,
+        lat_span: f64,
+    },
+    Database(sqlx::Error),
+}
+
+impl From<sqlx::Error> for AircraftInError {
+    fn from(err: sqlx::Error) -> Self {
+        Self::Database(err)
+    }
+}
+
 /// An aircraft and its positions, oldest first. The descriptive fields are
 /// the most recent non-null values in the trace.
 #[derive(Serialize, JsonSchema)]
 pub struct Aircraft {
-    pub hex: String,
+    pub aircraft_address: String,
     pub flight: Option<String>,
     pub registration: Option<String>,
     pub aircraft_type: Option<String>,
@@ -43,9 +79,8 @@ pub struct TracePoint {
     pub geom_rate: Option<i32>,
 }
 
-#[derive(sqlx::FromRow)]
 struct PositionRow {
-    hex: String,
+    aircraft_address: String,
     observed_at: DateTime<Utc>,
     flight: Option<String>,
     registration: Option<String>,
@@ -64,68 +99,54 @@ struct PositionRow {
     geom_rate: Option<i32>,
 }
 
-/// Returns the aircraft whose latest position in `[since, until]` is inside
-/// `area`, each with every position in that window. Traces may extend outside
-/// `area`.
+/// Returns the positions in `[since, until]` inside `area`, grouped by
+/// aircraft, oldest first.
 pub async fn aircraft_in(
     pool: &PgPool,
     area: &BoundingBox,
     since: DateTime<Utc>,
     until: DateTime<Utc>,
-) -> sqlx::Result<Vec<Aircraft>> {
-    let rows: Vec<PositionRow> = sqlx::query_as(
+) -> Result<Vec<Aircraft>, AircraftInError> {
+    let (lng_span, lat_span) = (area.lng_span(), area.lat_span());
+    if lng_span > MAX_AREA_DEGREES || lat_span > MAX_AREA_DEGREES {
+        return Err(AircraftInError::AreaTooLarge { lng_span, lat_span });
+    }
+    let rows = sqlx::query_as!(
+        PositionRow,
         r#"
-        WITH recent AS (
-            SELECT
-                hex, observed_at, flight, registration, aircraft_type, category, squawk,
-                ST_Y(position::geometry) AS lat, ST_X(position::geometry) AS lon,
-                on_ground, alt_baro, alt_geom, ground_speed, track, true_heading,
-                baro_rate, geom_rate
-            FROM aircraft_positions
-            WHERE observed_at BETWEEN $5 AND $6
-        ),
-        in_area AS (
-            SELECT hex
-            FROM (
-                SELECT DISTINCT ON (hex) hex, lat, lon
-                FROM recent
-                ORDER BY hex, observed_at DESC
-            ) latest
-            WHERE lat BETWEEN $2::float8 AND $4::float8
-              AND CASE
-                  WHEN $1::float8 <= $3::float8 THEN lon BETWEEN $1 AND $3
-                  ELSE lon >= $1 OR lon <= $3
-              END
-        )
         SELECT
-            hex, observed_at, flight, registration, aircraft_type, category, squawk,
-            lat, lon, on_ground, alt_baro, alt_geom, ground_speed, track, true_heading,
+            aircraft_address, observed_at, flight, registration, aircraft_type, category,
+            squawk, ST_Y(position::geometry) AS "lat!", ST_X(position::geometry) AS "lon!",
+            on_ground, alt_baro, alt_geom, ground_speed, track, true_heading,
             baro_rate, geom_rate
-        FROM recent
-        JOIN in_area USING (hex)
-        ORDER BY hex, observed_at
+        FROM aircraft_positions
+        WHERE observed_at BETWEEN $5 AND $6
+          -- Geography edges take the shorter way around, so west > east
+          -- crosses the antimeridian.
+          AND ST_Intersects(position, ST_MakeEnvelope($1, $2, $3, $4, 4326)::geography)
+        ORDER BY aircraft_address, observed_at
         "#,
+        area.west,
+        area.south,
+        area.east,
+        area.north,
+        since,
+        until,
     )
-    .bind(area.west)
-    .bind(area.south)
-    .bind(area.east)
-    .bind(area.north)
-    .bind(since)
-    .bind(until)
     .fetch_all(pool)
     .await?;
     Ok(group_by_aircraft(rows))
 }
 
-/// Groups rows sorted by `(hex, observed_at)` into one `Aircraft` per hex.
+/// Groups rows sorted by `(aircraft_address, observed_at)` into one `Aircraft` per aircraft.
 fn group_by_aircraft(rows: Vec<PositionRow>) -> Vec<Aircraft> {
     let mut aircraft: Vec<Aircraft> = Vec::new();
     for row in rows {
         let current = match aircraft.last_mut() {
-            Some(last) if last.hex == row.hex => last,
+            Some(last) if last.aircraft_address == row.aircraft_address => last,
             _ => {
                 aircraft.push(Aircraft {
-                    hex: row.hex,
+                    aircraft_address: row.aircraft_address,
                     flight: None,
                     registration: None,
                     aircraft_type: None,
@@ -156,4 +177,30 @@ fn group_by_aircraft(rows: Vec<PositionRow>) -> Vec<Aircraft> {
         });
     }
     aircraft
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BoundingBox;
+
+    fn lng_span(west: f64, east: f64) -> f64 {
+        BoundingBox {
+            west,
+            south: 0.0,
+            east,
+            north: 1.0,
+        }
+        .lng_span()
+    }
+
+    #[test]
+    fn measures_lng_span() {
+        assert_eq!(lng_span(-123.0, -121.5), 1.5);
+        assert_eq!(lng_span(-180.0, 180.0), 360.0);
+    }
+
+    #[test]
+    fn measures_lng_span_across_antimeridian() {
+        assert_eq!(lng_span(179.0, -179.0), 2.0);
+    }
 }

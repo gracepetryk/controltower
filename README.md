@@ -35,6 +35,8 @@ npm run dev
 
 The dev server proxies `/api` to `API_URL` (default `http://127.0.0.1:3000`).
 
+`server` checks its queries against the database when it compiles, so build it after `ingest` has applied the migrations, or set `SQLX_OFFLINE=true` to check against the saved query data in `apps/api/.sqlx` instead. After changing a query, regenerate that data with `cargo sqlx prepare --workspace` (from [sqlx-cli](https://crates.io/crates/sqlx-cli)).
+
 To replay a past day instead of live traffic, import it and set `REPLAY_DATE` for the server:
 
 ```sh

@@ -17,7 +17,8 @@ pub struct Client {
 /// An aircraft position report, as returned by the API.
 #[derive(Debug, Deserialize)]
 pub struct Aircraft {
-    pub hex: String,
+    #[serde(rename = "hex")]
+    pub aircraft_address: String,
     #[serde(rename = "type")]
     pub source: String,
     pub flight: Option<String>,
@@ -123,7 +124,7 @@ impl Aircraft {
         let (on_ground, alt_baro) = BaroAltitude::split(self.alt_baro);
         Some(Position {
             observed_at,
-            hex: self.hex,
+            aircraft_address: self.aircraft_address,
             flight,
             registration: self.registration,
             aircraft_type: self.aircraft_type,
