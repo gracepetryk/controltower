@@ -25,20 +25,31 @@ services:
       - db
     networks: [internal]
 
-  caddy:
+  # Copies the frontend build into the web volume, then exits.
+  web:
     build:
       context: apps/web
       args:
         VITE_MAPBOX_ACCESS_TOKEN: ${VITE_MAPBOX_ACCESS_TOKEN:?set VITE_MAPBOX_ACCESS_TOKEN in .env}
+    volumes:
+      - web:/srv
+    network_mode: none
+
+  caddy:
+    image: caddy:2-alpine
     restart: unless-stopped
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - web:/srv:ro
     depends_on:
-      - server
+      server:
+        condition: service_started
+      web:
+        condition: service_completed_successfully
     networks: [internal]
 
   cloudflared:
-    image: cloudflare/cloudflared:2026.10.0
+    image: cloudflare/cloudflared:latest
     command: tunnel --no-autoupdate run
     restart: unless-stopped
     environment:
@@ -58,3 +69,4 @@ networks:
 
 volumes:
   db:
+  web:
