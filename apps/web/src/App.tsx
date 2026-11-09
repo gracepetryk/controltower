@@ -6,33 +6,38 @@ import 'mapbox-gl/dist/mapbox-gl.css'
 import './App.css'
 import { AircraftFeed } from './flight/AircraftFeed'
 import { AircraftLayer } from './flight/AircraftLayer'
-import { type BoundingBox, wrapLongitude } from './flight/aircraftApi'
+import { MapTerrain } from './flight/MapTerrain'
+import type { BoundingBox } from './flight/aircraftApi'
+import { METERS_PER_DEGREE, metersPerDegreeLng, wrapLongitude } from './flight/geo'
+import { useAircraftPolling } from './flight/useAircraftPolling'
 
 const accessToken = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN
 const center:[number, number] = [-122.30880, 47.45020]
 const MAX_AIRCRAFT = 1000
 const TRAIL_MS = 60_000
+// Aircraft are drawn this far behind the server's clock. The newest stored position is usually 10 to
+// 35 s old, so most aircraft have a recorded position after the drawn time to interpolate toward.
+const DISPLAY_DELAY_MS = 40_000
 // Smoothed trails are split into as many points as fit.
 const MAX_TRAIL_POINTS = 256
 
 // Aircraft are fetched no farther than this from the map's center. A tilted camera sees toward the
 // horizon, and this keeps the request near the area the camera is looking at.
 const MAX_VIEW_DISTANCE_M = 120_000
-const METERS_PER_DEGREE = 111_320
 
 // The map's visible area, cut off at `MAX_VIEW_DISTANCE_M` from the center, with longitudes wrapped
 // into [-180, 180].
 function visibleBounds(map: mapboxgl.Map): BoundingBox {
   const { width, height } = map.getCanvas().getBoundingClientRect()
   const center = map.getCenter()
-  const metersPerDegreeLng = METERS_PER_DEGREE * Math.cos((center.lat * Math.PI) / 180)
+  const metersPerLng = metersPerDegreeLng(center.lat)
   // Offsets in meters east and north of the center, of points around the edge of the screen.
   const offsets = [0, 0.5, 1]
     .flatMap((x) => [0, 0.5, 1].map((y) => [x * width, y * height] as [number, number]))
     .filter(([x, y]) => x !== width / 2 || y !== height / 2)
     .map((point) => {
       const { lng, lat } = map.unproject(point)
-      const east = wrapLongitude(lng - center.lng) * metersPerDegreeLng
+      const east = wrapLongitude(lng - center.lng) * metersPerLng
       const north = (lat - center.lat) * METERS_PER_DEGREE
       const scale = Math.min(1, MAX_VIEW_DISTANCE_M / Math.hypot(east, north))
       return [east * scale, north * scale]
@@ -40,9 +45,9 @@ function visibleBounds(map: mapboxgl.Map): BoundingBox {
   const easts = offsets.map(([east]) => east)
   const norths = offsets.map(([, north]) => north)
   return [
-    wrapLongitude(center.lng + Math.min(...easts) / metersPerDegreeLng),
+    wrapLongitude(center.lng + Math.min(...easts) / metersPerLng),
     Math.max(center.lat + Math.min(...norths) / METERS_PER_DEGREE, -90),
-    wrapLongitude(center.lng + Math.max(...easts) / metersPerDegreeLng),
+    wrapLongitude(center.lng + Math.max(...easts) / metersPerLng),
     Math.min(center.lat + Math.max(...norths) / METERS_PER_DEGREE, 90),
   ]
 }
@@ -52,6 +57,16 @@ function App() {
   const [map, setMap] = useState<mapboxgl.Map | null>(null)
   const mapContainerRef = useRef<HTMLDivElement>(null)
   const [inputValue, setInputValue] = useState('')
+  const [terrain] = useState(() => new MapTerrain())
+  const [feed] = useState(
+    () =>
+      new AircraftFeed({
+        // The trail behind each aircraft as it is drawn, `DISPLAY_DELAY_MS` behind the server's clock.
+        historyMs: TRAIL_MS + DISPLAY_DELAY_MS,
+        ground: terrain,
+      }),
+  )
+  const { setBounds, setPaused } = useAircraftPolling(feed)
 
   useEffect(() => {
     const map = new mapboxgl.Map({
@@ -62,37 +77,44 @@ function App() {
       zoom: 13,
       pitch: 60,
     })
+    terrain.attach(map)
 
     const aircraftLayer = new AircraftLayer('aircraft', {
+      feed,
+      delayMs: DISPLAY_DELAY_MS,
+      trailMs: TRAIL_MS,
       origin: center,
       maxAircraft: MAX_AIRCRAFT,
       maxTrailPoints: MAX_TRAIL_POINTS,
     })
+    // Aircraft are fetched for the visible area once the map loads, and after every pan, zoom,
+    // rotation, tilt and resize.
     map.on('load', () => {
       map.addLayer(aircraftLayer)
       setMap(map)
+      setBounds(visibleBounds(map))
     })
-
-    const feed = new AircraftFeed({
-      trailMs: TRAIL_MS,
-      bounds: () => visibleBounds(map),
-      groundElevation: (lng, lat) => map.queryTerrainElevation([lng, lat]) ?? 0,
+    // Polling and terrain updates pause while the camera moves: rebuilding aircraft mid-move would
+    // stutter the animation, and the area to fetch is only known once the move ends, which then polls
+    // right away.
+    map.on('movestart', () => {
+      setPaused(true)
+      terrain.pause()
     })
-    feed.start()
-
-    let frame = requestAnimationFrame(function tick() {
-      // Scheduled first so that an error drawing one frame doesn't stop the loop.
-      frame = requestAnimationFrame(tick)
-      feed.draw(aircraftLayer)
+    map.on('moveend', () => {
+      setPaused(false)
+      setBounds(visibleBounds(map))
+      terrain.resume()
     })
 
     return () => {
-      cancelAnimationFrame(frame)
-      feed.stop()
+      setBounds(null)
+      setPaused(false)
       setMap(null)
+      terrain.detach()
       map.remove()
     }
-  }, [])
+  }, [feed, terrain, setBounds, setPaused])
 
   return (
     <>

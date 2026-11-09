@@ -1,13 +1,16 @@
 import type { TracePoint } from './aircraftApi';
+import { METERS_PER_DEGREE, metersPerDegreeLng } from './geo';
 import type { FlightPosition } from './types';
 
 const FEET_TO_METERS = 0.3048;
 const KNOTS_TO_METERS_PER_SECOND = 1852 / 3600;
-const METERS_PER_DEGREE_LAT = 111_320;
-// Aircraft are never drawn closer to the ground than this, so they sit on top of the terrain.
+// Altitudes are clamped to at least this far above the ground, so aircraft sit on top of the terrain.
 const GROUND_CLEARANCE_METERS = 10 * FEET_TO_METERS;
 // No terrain is higher than this (Everest), so positions above it are never clamped.
 const MAX_TERRAIN_ELEVATION_METERS = 8_849;
+// Clamping to refined terrain only counts as a change past this, so that small refinements don't
+// rebuild every aircraft's trail.
+const CLAMP_TOLERANCE_METERS = 0.5;
 // Past its newest position, an aircraft keeps moving along its track for at most this long, then holds.
 const MAX_EXTRAPOLATION_MS = 30_000;
 
@@ -17,8 +20,8 @@ export interface TimedPosition extends FlightPosition {
   // Direction of motion in degrees clockwise from true north.
   trackDegrees: number;
   groundSpeedMetersPerSecond: number;
-  // Reported altitude in meters, or null on the ground. `altitudeMeters` is this, raised to at
-  // least GROUND_CLEARANCE_METERS above the ground by `clampToGround`.
+  // Reported altitude in meters, or null on the ground. `altitudeMeters` is this, clamped to at
+  // least GROUND_CLEARANCE_METERS above the ground.
   reportedAltitudeMeters: number | null;
 }
 
@@ -32,8 +35,13 @@ export interface PathPoint {
 }
 
 // Converts an API trace, oldest first, into positions. Missing headings, tracks, ground speeds and
-// altitudes carry over from the previous point. Call `clampToGround` to place them above the terrain.
-export function toTimedPositions(trace: TracePoint[]): TimedPosition[] {
+// altitudes carry over from the previous point. Each altitude is clamped to at least
+// GROUND_CLEARANCE_METERS above `groundElevation`, and positions on the ground are clamped to exactly
+// that clearance. Positions reported above any terrain aren't clamped.
+export function toTimedPositions(
+  trace: TracePoint[],
+  groundElevation: (lng: number, lat: number) => number,
+): TimedPosition[] {
   const positions: TimedPosition[] = [];
   for (const point of trace) {
     const previous = positions.at(-1);
@@ -48,7 +56,7 @@ export function toTimedPositions(trace: TracePoint[]): TimedPosition[] {
       timeMs: point.observed_at,
       lng: point.lon,
       lat: point.lat,
-      altitudeMeters: reportedAltitudeMeters ?? GROUND_CLEARANCE_METERS,
+      altitudeMeters: altitudeAboveGround(point.lon, point.lat, reportedAltitudeMeters, groundElevation),
       reportedAltitudeMeters,
       headingDegrees,
       trackDegrees: point.track ?? previous?.trackDegrees ?? headingDegrees,
@@ -61,35 +69,55 @@ export function toTimedPositions(trace: TracePoint[]): TimedPosition[] {
   return positions;
 }
 
-// Sets each position's altitude to its reported altitude, raised to at least GROUND_CLEARANCE_METERS
-// above `groundElevation`. Positions on the ground sit at exactly that clearance. Positions reported
-// above any terrain are skipped. Returns whether any altitude changed.
-export function clampToGround(
-  positions: TimedPosition[],
+// `positions` with their altitudes clamped to the ground in `groundElevation` again, as in
+// `toTimedPositions`. Altitudes that would change by less than CLAMP_TOLERANCE_METERS are kept.
+// Returns `positions` itself if no altitude changed.
+export function withGroundClamping(
+  positions: readonly TimedPosition[],
   groundElevation: (lng: number, lat: number) => number,
-): boolean {
+): readonly TimedPosition[] {
   let changed = false;
-  for (const position of positions) {
-    const reported = position.reportedAltitudeMeters;
-    if (reported !== null && reported > MAX_TERRAIN_ELEVATION_METERS) {
-      continue;
+  const updated = positions.map((position) => {
+    const altitudeMeters = altitudeAboveGround(
+      position.lng,
+      position.lat,
+      position.reportedAltitudeMeters,
+      groundElevation,
+    );
+    if (Math.abs(altitudeMeters - position.altitudeMeters) < CLAMP_TOLERANCE_METERS) {
+      return position;
     }
-    const minimum = groundElevation(position.lng, position.lat) + GROUND_CLEARANCE_METERS;
-    const altitudeMeters = Math.max(reported ?? minimum, minimum);
-    changed ||= altitudeMeters !== position.altitudeMeters;
-    position.altitudeMeters = altitudeMeters;
+    changed = true;
+    return { ...position, altitudeMeters };
+  });
+  return changed ? updated : positions;
+}
+
+// `reportedAltitudeMeters` clamped to at least GROUND_CLEARANCE_METERS above the ground at a point in
+// `groundElevation`, or to exactly that clearance on the ground. Altitudes above any terrain aren't
+// clamped, and the ground isn't looked up for them.
+function altitudeAboveGround(
+  lng: number,
+  lat: number,
+  reportedAltitudeMeters: number | null,
+  groundElevation: (lng: number, lat: number) => number,
+): number {
+  if (reportedAltitudeMeters !== null && reportedAltitudeMeters > MAX_TERRAIN_ELEVATION_METERS) {
+    return reportedAltitudeMeters;
   }
-  return changed;
+  const minimumMeters = groundElevation(lng, lat) + GROUND_CLEARANCE_METERS;
+  return Math.max(reportedAltitudeMeters ?? minimumMeters, minimumMeters);
 }
 
 // The position at `timeMs`, interpolated between the positions around it. After the newest position,
 // it is extrapolated along the last track. Returns null before the oldest position.
-export function positionAt(positions: TimedPosition[], timeMs: number): FlightPosition | null {
-  const next = positions.findIndex((position) => position.timeMs > timeMs);
-  if (next === 0 || positions.length === 0) {
+export function positionAt(positions: readonly TimedPosition[], timeMs: number): FlightPosition | null {
+  // Searched from the end, since aircraft are drawn near their newest positions.
+  const next = positions.findLastIndex((position) => position.timeMs <= timeMs) + 1;
+  if (next === 0) {
     return null;
   }
-  if (next === -1) {
+  if (next === positions.length) {
     return extrapolate(positions[positions.length - 1], timeMs);
   }
   const start = positions[next - 1];
@@ -107,7 +135,7 @@ export function positionAt(positions: TimedPosition[], timeMs: number): FlightPo
 // cubic B-spline with the positions as control points, so it averages out jitter in the recorded
 // positions instead of passing through them. It starts exactly at the oldest position and ends
 // exactly at the newest. Times are blended like positions, so they increase along the curve.
-export function smoothPath(positions: TimedPosition[], maxPoints: number): PathPoint[] {
+export function smoothPath(positions: readonly TimedPosition[], maxPoints: number): PathPoint[] {
   const toPathPoint = ({ lng, lat, altitudeMeters, timeMs }: PathPoint): PathPoint => ({
     lng,
     lat,
@@ -151,10 +179,9 @@ function extrapolate(last: TimedPosition, timeMs: number): FlightPosition {
   const seconds = Math.min(timeMs - last.timeMs, MAX_EXTRAPOLATION_MS) / 1000;
   const meters = last.groundSpeedMetersPerSecond * seconds;
   const track = (last.trackDegrees * Math.PI) / 180;
-  const metersPerDegreeLng = METERS_PER_DEGREE_LAT * Math.cos((last.lat * Math.PI) / 180);
   return {
-    lng: last.lng + (meters * Math.sin(track)) / metersPerDegreeLng,
-    lat: last.lat + (meters * Math.cos(track)) / METERS_PER_DEGREE_LAT,
+    lng: last.lng + (meters * Math.sin(track)) / metersPerDegreeLng(last.lat),
+    lat: last.lat + (meters * Math.cos(track)) / METERS_PER_DEGREE,
     altitudeMeters: last.altitudeMeters,
     headingDegrees: last.headingDegrees,
   };

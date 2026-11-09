@@ -1,5 +1,7 @@
 // Client for the controltower API's `GET /aircraft`, served under /api by the dev server's proxy.
 
+import { METERS_PER_DEGREE, metersPerDegreeLng, wrapLongitude } from './geo';
+
 export interface TracePoint {
   // Milliseconds since the Unix epoch.
   observed_at: number;
@@ -33,13 +35,6 @@ export interface AircraftResponse {
 // [west, south, east, north] in degrees. `west > east` crosses the antimeridian.
 export type BoundingBox = [number, number, number, number];
 
-const METERS_PER_DEGREE_LATITUDE = 111_320;
-
-// Wraps a longitude into [-180, 180).
-export function wrapLongitude(lng: number): number {
-  return ((((lng + 180) % 360) + 360) % 360) - 180;
-}
-
 // Degrees of longitude `bbox` spans, in [0, 360].
 function lngSpan([west, , east]: BoundingBox): number {
   return west <= east ? east - west : east - west + 360;
@@ -49,11 +44,11 @@ function lngSpan([west, , east]: BoundingBox): number {
 // within the box's latitudes.
 export function padBoundingBox(bbox: BoundingBox, meters: number): BoundingBox {
   const [west, south, east, north] = bbox;
-  const latPad = meters / METERS_PER_DEGREE_LATITUDE;
+  const latPad = meters / METERS_PER_DEGREE;
   const padSouth = Math.max(south - latPad, -90);
   const padNorth = Math.min(north + latPad, 90);
   const maxAbsLat = Math.min(Math.max(Math.abs(padSouth), Math.abs(padNorth)), 89);
-  const lngPad = latPad / Math.cos((maxAbsLat * Math.PI) / 180);
+  const lngPad = meters / metersPerDegreeLng(maxAbsLat);
   if (lngSpan(bbox) + 2 * lngPad >= 360) {
     return [-180, padSouth, 180, padNorth];
   }
