@@ -22,22 +22,31 @@ impl BoundingBox {
         }
     }
 
-    /// Degrees of latitude the box spans.
-    fn lat_span(&self) -> f64 {
-        self.north - self.south
+    /// Lengths in meters of the south, north and west (or east) edges. The
+    /// south and north edges follow their parallels.
+    fn edge_lengths_meters(&self) -> [f64; 3] {
+        let along_parallel =
+            |lat: f64| self.lng_span() * METERS_PER_DEGREE * lat.to_radians().cos();
+        [
+            along_parallel(self.south),
+            along_parallel(self.north),
+            (self.north - self.south) * METERS_PER_DEGREE,
+        ]
     }
 }
 
-/// The most degrees of longitude or latitude `aircraft_in` searches, about a
-/// metro area plus its surroundings. Geography edges are great circles, which
-/// bow toward the pole by a few km at this span.
-pub const MAX_AREA_DEGREES: f64 = 5.0;
+/// Meters in a degree of latitude, and in a degree of longitude at the equator.
+const METERS_PER_DEGREE: f64 = 111_320.0;
+
+/// The longest edge of an area `aircraft_in` searches, about a metro area plus
+/// its surroundings. Geography edges are great circles, which bow toward the
+/// pole by a few km at this length.
+pub const MAX_AREA_EDGE_METERS: f64 = 400_000.0;
 
 pub enum AircraftInError {
-    /// `area` spans more than `MAX_AREA_DEGREES` of longitude or latitude.
+    /// An edge of `area` is longer than `MAX_AREA_EDGE_METERS`.
     AreaTooLarge {
-        lng_span: f64,
-        lat_span: f64,
+        longest_edge_meters: f64,
     },
     Database(sqlx::Error),
 }
@@ -107,9 +116,11 @@ pub async fn aircraft_in(
     since: DateTime<Utc>,
     until: DateTime<Utc>,
 ) -> Result<Vec<Aircraft>, AircraftInError> {
-    let (lng_span, lat_span) = (area.lng_span(), area.lat_span());
-    if lng_span > MAX_AREA_DEGREES || lat_span > MAX_AREA_DEGREES {
-        return Err(AircraftInError::AreaTooLarge { lng_span, lat_span });
+    let longest_edge_meters = area.edge_lengths_meters().into_iter().fold(0.0, f64::max);
+    if longest_edge_meters > MAX_AREA_EDGE_METERS {
+        return Err(AircraftInError::AreaTooLarge {
+            longest_edge_meters,
+        });
     }
     let rows = sqlx::query_as!(
         PositionRow,
@@ -193,6 +204,17 @@ mod tests {
         .lng_span()
     }
 
+    fn edge_lengths_km(west: f64, south: f64, east: f64, north: f64) -> [f64; 3] {
+        BoundingBox {
+            west,
+            south,
+            east,
+            north,
+        }
+        .edge_lengths_meters()
+        .map(|meters| (meters / 1000.0).round())
+    }
+
     #[test]
     fn measures_lng_span() {
         assert_eq!(lng_span(-123.0, -121.5), 1.5);
@@ -202,5 +224,19 @@ mod tests {
     #[test]
     fn measures_lng_span_across_antimeridian() {
         assert_eq!(lng_span(179.0, -179.0), 2.0);
+    }
+
+    #[test]
+    fn measures_edges_along_parallels() {
+        // A degree of longitude is half as long at 60° as at the equator.
+        assert_eq!(edge_lengths_km(0.0, 0.0, 2.0, 60.0), [223.0, 111.0, 6679.0]);
+    }
+
+    #[test]
+    fn measures_edges_across_antimeridian() {
+        assert_eq!(
+            edge_lengths_km(179.0, -1.0, -179.0, 1.0),
+            [223.0, 223.0, 223.0]
+        );
     }
 }

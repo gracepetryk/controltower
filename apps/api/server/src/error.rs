@@ -8,7 +8,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
-use crate::store::{AircraftInError, MAX_AREA_DEGREES};
+use crate::store::{AircraftInError, MAX_AREA_EDGE_METERS};
 
 pub enum ApiError {
     /// The request was invalid. The message is returned to the client.
@@ -43,8 +43,12 @@ impl From<sqlx::Error> for ApiError {
 impl From<AircraftInError> for ApiError {
     fn from(err: AircraftInError) -> Self {
         match err {
-            AircraftInError::AreaTooLarge { lng_span, lat_span } => Self::AreaTooLarge(format!(
-                "bbox spans {lng_span}° of longitude and {lat_span}° of latitude; the most is {MAX_AREA_DEGREES}° of each"
+            AircraftInError::AreaTooLarge {
+                longest_edge_meters,
+            } => Self::AreaTooLarge(format!(
+                "bbox has an edge {:.0} km long; the most is {:.0} km",
+                longest_edge_meters / 1000.0,
+                MAX_AREA_EDGE_METERS / 1000.0,
             )),
             AircraftInError::Database(err) => err.into(),
         }
