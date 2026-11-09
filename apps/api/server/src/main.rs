@@ -98,7 +98,7 @@ async fn main() -> anyhow::Result<()> {
 
 async fn health(State(pool): State<PgPool>) -> StatusCode {
     match sqlx::query!("SELECT 1 as col").fetch_one(&pool).await {
-        Ok(r) => StatusCode::OK,
+        Ok(_) => StatusCode::OK,
         Err(err) => {
             tracing::error!("health check: {err:#}");
             StatusCode::SERVICE_UNAVAILABLE
