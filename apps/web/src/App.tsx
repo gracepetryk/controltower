@@ -15,9 +15,9 @@ const accessToken = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN
 const center:[number, number] = [-122.30880, 47.45020]
 const MAX_AIRCRAFT = 1000
 const TRAIL_MS = 60_000
-// Aircraft are drawn this far behind the server's clock. The newest stored position is usually 10 to
-// 35 s old, so most aircraft have a recorded position after the drawn time to interpolate toward.
-const DISPLAY_DELAY_MS = 40_000
+// Aircraft are drawn this far in the past, so that the positions fetched since then lead them until
+// the next poll.
+const DISPLAY_DELAY_MS = 60_000
 // Smoothed trails are split into as many points as fit.
 const MAX_TRAIL_POINTS = 256
 

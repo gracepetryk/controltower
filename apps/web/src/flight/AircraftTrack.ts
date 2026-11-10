@@ -16,7 +16,7 @@ export interface TrackScene {
 export class AircraftTrack {
   readonly trace: readonly TimedPosition[];
   // `trace` smoothed into a curve in the scene, oldest first, and the time at each point. Built on
-  // the first `trailAt`.
+  // the first `trailAt`, from the position its trail starts after, since trails only get later.
   private path: { points: THREE.Vector3[]; timesMs: number[] } | null = null;
 
   constructor(trace: readonly TimedPosition[]) {
@@ -32,7 +32,7 @@ export class AircraftTrack {
   // point to 1 at `timeMs`. The trail starts at the oldest point of the path if that is within the
   // window.
   trailAt(timeMs: number, trailMs: number, scene: TrackScene): { points: THREE.Vector3[]; fades: number[] } {
-    const { points, timesMs } = (this.path ??= this.buildPath(scene));
+    const { points, timesMs } = (this.path ??= this.buildPath(timeMs - trailMs, scene));
     const startMs = Math.max(timeMs - trailMs, timesMs[0]);
     const spanMs = timeMs - startMs;
     const trailPoints: THREE.Vector3[] = [];
@@ -60,9 +60,11 @@ export class AircraftTrack {
     return { points: trailPoints, fades };
   }
 
-  private buildPath(scene: TrackScene): NonNullable<AircraftTrack['path']> {
+  // The path from the newest position at or before `startMs`, or from the oldest if none is.
+  private buildPath(startMs: number, scene: TrackScene): NonNullable<AircraftTrack['path']> {
+    const first = Math.max(this.trace.findLastIndex((position) => position.timeMs <= startMs), 0);
     // Leaves room for the interpolated start of the trail and the aircraft itself.
-    const path = smoothPath(this.trace, scene.maxTrailPoints - 2);
+    const path = smoothPath(this.trace.slice(first), scene.maxTrailPoints - 2);
     return {
       points: path.map((point) => scene.scenePoint(point)),
       timesMs: path.map((point) => point.timeMs),

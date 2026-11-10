@@ -1,6 +1,6 @@
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, NaiveDate, TimeDelta, Utc};
 
-/// The time the server treats as now.
+/// Which day's positions the server serves as the current ones.
 #[derive(Clone, Copy)]
 pub enum Clock {
     Live,
@@ -24,11 +24,31 @@ impl Clock {
         }
     }
 
-    pub fn now(self) -> DateTime<Utc> {
-        let now = Utc::now();
+    /// What to add to a time on the day of `at` to get the same time of day
+    /// on the date whose positions are served. Zero when live.
+    pub fn replay_offset(self, at: DateTime<Utc>) -> TimeDelta {
         match self {
-            Self::Live => now,
-            Self::Replay(date) => date.and_time(now.time()).and_utc(),
+            Self::Live => TimeDelta::zero(),
+            Self::Replay(date) => date.signed_duration_since(at.date_naive()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{NaiveDate, TimeDelta};
+
+    use super::Clock;
+
+    #[test]
+    fn replay_offset_moves_to_replayed_date() {
+        let date = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
+        let at = NaiveDate::from_ymd_opt(2026, 3, 4)
+            .unwrap()
+            .and_hms_opt(23, 59, 0)
+            .unwrap()
+            .and_utc();
+        assert_eq!(Clock::Replay(date).replay_offset(at), TimeDelta::days(-3));
+        assert_eq!(Clock::Live.replay_offset(at), TimeDelta::zero());
     }
 }

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            aircraft_address, observed_at, flight, registration, aircraft_type, category,\n            squawk, ST_Y(position::geometry) AS \"lat!\", ST_X(position::geometry) AS \"lon!\",\n            on_ground, alt_baro, alt_geom, ground_speed, track, true_heading,\n            baro_rate, geom_rate\n        FROM aircraft_positions\n        WHERE observed_at BETWEEN $5 AND $6\n          -- Geography edges take the shorter way around, so west > east\n          -- crosses the antimeridian.\n          AND ST_Intersects(position, ST_MakeEnvelope($1, $2, $3, $4, 4326)::geography)\n        ORDER BY aircraft_address, observed_at\n        ",
+  "query": "\n        SELECT\n            aircraft_address, observed_at, flight, registration, aircraft_type, category,\n            squawk, ST_Y(position::geometry) AS \"lat!\", ST_X(position::geometry) AS \"lon!\",\n            on_ground, alt_baro, alt_geom, ground_speed, track, true_heading,\n            baro_rate, geom_rate\n        FROM aircraft_positions\n        WHERE observed_at >= $5 AND observed_at < $6\n          -- Geography edges take the shorter way around, so west > east\n          -- crosses the antimeridian.\n          AND ST_Intersects(position, ST_MakeEnvelope($1, $2, $3, $4, 4326)::geography)\n        ORDER BY aircraft_address, observed_at\n        ",
   "describe": {
     "columns": [
       {
@@ -119,5 +119,5 @@
       true
     ]
   },
-  "hash": "7c6ce2541582f55936135474a8fc4c008b41a30e6e2801c3e2c925d3b8d62608"
+  "hash": "001c427d2503291af74c15b83f54307414841d41b0c2e23537ed8175b7844655"
 }

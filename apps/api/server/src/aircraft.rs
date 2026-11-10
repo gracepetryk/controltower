@@ -3,9 +3,9 @@ use axum::{
     Json,
     extract::{Query, State},
 };
-use chrono::TimeDelta;
+use chrono::{DateTime, TimeDelta, Utc};
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use sqlx::PgPool;
 
 use crate::{
@@ -14,8 +14,8 @@ use crate::{
     store::{self, Aircraft, BoundingBox},
 };
 
-/// The longest trace a client can request.
-const MAX_TRACE_SECONDS: u32 = 60 * 60;
+/// The longest time span a client can request.
+const MAX_SPAN: TimeDelta = TimeDelta::hours(1);
 
 #[derive(Deserialize, JsonSchema)]
 pub struct Params {
@@ -24,49 +24,60 @@ pub struct Params {
     /// 400 km along each edge.
     #[schemars(example = "-123.5,46.5,-121,48.5")]
     bbox: String,
-    /// How many seconds of positions to return.
-    #[schemars(range(min = 1, max = MAX_TRACE_SECONDS))]
-    trace_seconds: u32,
+    /// Start of the time span, inclusive, in seconds since the Unix epoch.
+    since: i64,
+    /// End of the time span, exclusive, in seconds since the Unix epoch. At
+    /// most an hour after `since`.
+    until: i64,
 }
 
-#[derive(Serialize, JsonSchema)]
-pub struct AircraftResponse {
-    /// Server time in milliseconds since the Unix epoch. When the server is
-    /// replaying recorded positions, this is the replayed time.
-    now: i64,
-    aircraft: Vec<Aircraft>,
-}
-
-/// `GET /aircraft?bbox=west,south,east,north&trace_seconds=N`
+/// `GET /aircraft?bbox=west,south,east,north&since=S&until=S`
 pub async fn list(
     State(pool): State<PgPool>,
     State(clock): State<Clock>,
     Query(params): Query<Params>,
-) -> Result<Json<AircraftResponse>, ApiError> {
+) -> Result<Json<Vec<Aircraft>>, ApiError> {
     let area = parse_bbox(&params.bbox)?;
-    if !(1..=MAX_TRACE_SECONDS).contains(&params.trace_seconds) {
-        return Err(ApiError::BadRequest(format!(
-            "trace_seconds must be between 1 and {MAX_TRACE_SECONDS}"
-        )));
+    let (since, until) = parse_span(params.since, params.until)?;
+    // When replaying, the span is served from the same times of day on the
+    // replayed date, and the positions are reported as if they were today.
+    let offset = clock.replay_offset(until);
+    let mut aircraft = store::aircraft_in(&pool, &area, since + offset, until + offset).await?;
+    let offset_ms = offset.num_milliseconds();
+    for point in aircraft.iter_mut().flat_map(|aircraft| &mut aircraft.trace) {
+        point.observed_at -= offset_ms;
     }
-    let now = clock.now();
-    let since = now - TimeDelta::seconds(params.trace_seconds.into());
-    let aircraft = store::aircraft_in(&pool, &area, since, now).await?;
-    Ok(Json(AircraftResponse {
-        now: now.timestamp_millis(),
-        aircraft,
-    }))
+    Ok(Json(aircraft))
 }
 
 pub fn list_docs(op: TransformOperation) -> TransformOperation {
     op.summary("Aircraft in an area, with traces")
         .description(
-            "Returns the positions in the last `trace_seconds` inside `bbox`, grouped by \
-         aircraft, oldest first. `bbox` can be at most 400 km along each edge, or the response is 413.",
+            "Returns the positions observed in `[since, until)` inside `bbox`, grouped by \
+             aircraft, oldest first. `bbox` can be at most 400 km along each edge, or the \
+             response is 413. When the server replays a recorded day, the span is served \
+             from the same times of day on that day, and `observed_at` is reported as if \
+             it were the day of `until`.",
         )
-        .response_with::<200, Json<AircraftResponse>, _>(|res| {
+        .response_with::<200, Json<Vec<Aircraft>>, _>(|res| {
             res.description("The matching aircraft.")
         })
+}
+
+fn parse_span(since: i64, until: i64) -> Result<(DateTime<Utc>, DateTime<Utc>), ApiError> {
+    let invalid = || {
+        ApiError::BadRequest(format!(
+            "since and until must be seconds since the Unix epoch with since <= until \
+             and at most {} s apart; got {since} and {until}",
+            MAX_SPAN.num_seconds()
+        ))
+    };
+    let since = DateTime::from_timestamp(since, 0).ok_or_else(invalid)?;
+    let until = DateTime::from_timestamp(until, 0).ok_or_else(invalid)?;
+    if since > until || until - since > MAX_SPAN {
+        return Err(invalid());
+    }
+    Ok((since, until))
 }
 
 fn parse_bbox(bbox: &str) -> Result<BoundingBox, ApiError> {
@@ -104,7 +115,7 @@ fn parse_bbox(bbox: &str) -> Result<BoundingBox, ApiError> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_bbox;
+    use super::{parse_bbox, parse_span};
 
     #[test]
     fn parses_valid_bbox() {
@@ -118,6 +129,19 @@ mod tests {
     #[test]
     fn accepts_antimeridian_crossing() {
         assert!(parse_bbox("170,-10,-170,10").is_ok());
+    }
+
+    #[test]
+    fn accepts_span_up_to_an_hour() {
+        assert!(parse_span(0, 0).is_ok());
+        assert!(parse_span(1, 3_601).is_ok());
+    }
+
+    #[test]
+    fn rejects_invalid_span() {
+        assert!(parse_span(2, 1).is_err());
+        assert!(parse_span(0, 3_601).is_err());
+        assert!(parse_span(i64::MAX, i64::MAX).is_err());
     }
 
     #[test]

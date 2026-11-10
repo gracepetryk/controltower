@@ -25,13 +25,6 @@ export interface ApiAircraft {
   trace: TracePoint[];
 }
 
-export interface AircraftResponse {
-  // The server's time in milliseconds since the Unix epoch. When it is replaying recorded
-  // positions, this is the replayed time.
-  now: number;
-  aircraft: ApiAircraft[];
-}
-
 // [west, south, east, north] in degrees. `west > east` crosses the antimeridian.
 export type BoundingBox = [number, number, number, number];
 
@@ -58,13 +51,19 @@ export function padBoundingBox(bbox: BoundingBox, meters: number): BoundingBox {
 // Thrown by `fetchAircraft` when the server won't search an area as large as `bbox`.
 export class AreaTooLargeError extends Error {}
 
-// Fetches the positions in the last `traceSeconds` inside `bbox`, grouped by aircraft.
+// Fetches the positions observed in `[sinceSeconds, untilSeconds)` inside `bbox`, grouped by
+// aircraft. Times are seconds since the Unix epoch.
 export async function fetchAircraft(
   bbox: BoundingBox,
-  traceSeconds: number,
+  sinceSeconds: number,
+  untilSeconds: number,
   signal?: AbortSignal,
-): Promise<AircraftResponse> {
-  const params = new URLSearchParams({ bbox: bbox.join(','), trace_seconds: String(traceSeconds) });
+): Promise<ApiAircraft[]> {
+  const params = new URLSearchParams({
+    bbox: bbox.join(','),
+    since: String(sinceSeconds),
+    until: String(untilSeconds),
+  });
   const response = await fetch(`/api/aircraft?${params}`, { signal });
   if (response.status === 413) {
     throw new AreaTooLargeError(await response.text());

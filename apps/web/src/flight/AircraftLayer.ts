@@ -157,19 +157,16 @@ export class AircraftLayer implements mapboxgl.CustomLayerInterface {
     this.aircraft.delete(id);
   }
 
-  // Sets every aircraft to its position as of `delayMs` behind the feed's server clock, and removes
-  // the ones that have none. Aircraft beyond `maxAircraft` are skipped.
+  // Sets every aircraft to its position as of `delayMs` ago, and removes the ones that have none.
+  // Aircraft beyond `maxAircraft` are skipped.
   private syncWithFeed() {
     this.updateTracks();
-    const serverNowMs = this.feed.serverNow();
-    const timeMs = serverNowMs === null ? null : serverNowMs - this.delayMs;
+    const timeMs = Date.now() - this.delayMs;
     const positions = new Map<string, FlightPosition>();
-    if (timeMs !== null) {
-      for (const [address, track] of this.tracks) {
-        const position = track.positionAt(timeMs);
-        if (position) {
-          positions.set(address, position);
-        }
+    for (const [address, track] of this.tracks) {
+      const position = track.positionAt(timeMs);
+      if (position) {
+        positions.set(address, position);
       }
     }
     // Removing first frees room for the aircraft that are added.

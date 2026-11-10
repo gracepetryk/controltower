@@ -35,16 +35,17 @@ export interface PathPoint {
 }
 
 // Converts an API trace, oldest first, into positions. Missing headings, tracks, ground speeds and
-// altitudes carry over from the previous point. Each altitude is clamped to at least
-// GROUND_CLEARANCE_METERS above `groundElevation`, and positions on the ground are clamped to exactly
-// that clearance. Positions reported above any terrain aren't clamped.
+// altitudes carry over from the previous point, starting with `previous` when the trace continues
+// from it. Each altitude is clamped to at least GROUND_CLEARANCE_METERS above `groundElevation`, and
+// positions on the ground are clamped to exactly that clearance. Positions reported above any
+// terrain aren't clamped.
 export function toTimedPositions(
   trace: TracePoint[],
   groundElevation: (lng: number, lat: number) => number,
+  previous?: TimedPosition,
 ): TimedPosition[] {
   const positions: TimedPosition[] = [];
   for (const point of trace) {
-    const previous = positions.at(-1);
     const altitudeFeet = point.alt_geom ?? point.alt_baro;
     const headingDegrees = point.true_heading ?? point.track ?? previous?.headingDegrees ?? 0;
     const reportedAltitudeMeters = point.on_ground
@@ -65,6 +66,7 @@ export function toTimedPositions(
           ? point.ground_speed * KNOTS_TO_METERS_PER_SECOND
           : (previous?.groundSpeedMetersPerSecond ?? 0),
     });
+    previous = positions[positions.length - 1];
   }
   return positions;
 }

@@ -108,7 +108,7 @@ struct PositionRow {
     geom_rate: Option<i32>,
 }
 
-/// Returns the positions in `[since, until]` inside `area`, grouped by
+/// Returns the positions observed in `[since, until)` inside `area`, grouped by
 /// aircraft, oldest first.
 pub async fn aircraft_in(
     pool: &PgPool,
@@ -131,7 +131,7 @@ pub async fn aircraft_in(
             on_ground, alt_baro, alt_geom, ground_speed, track, true_heading,
             baro_rate, geom_rate
         FROM aircraft_positions
-        WHERE observed_at BETWEEN $5 AND $6
+        WHERE observed_at >= $5 AND observed_at < $6
           -- Geography edges take the shorter way around, so west > east
           -- crosses the antimeridian.
           AND ST_Intersects(position, ST_MakeEnvelope($1, $2, $3, $4, 4326)::geography)
