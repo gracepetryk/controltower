@@ -25,8 +25,8 @@ interface AircraftFeedOptions {
   ground: Ground;
 }
 
-// Holds the aircraft from `GET /aircraft` responses: each one's newest MAX_POSITIONS positions, while
-// it has one in the last `historyMs`.
+// Holds the aircraft from `GET /api/aircraft` responses: each one's newest MAX_POSITIONS positions,
+// while it has one in the last `historyMs`.
 export class AircraftFeed {
   readonly historyMs: number;
   private readonly ground: Ground;

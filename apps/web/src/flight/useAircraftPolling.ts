@@ -17,7 +17,7 @@ const MAX_GROUND_SPEED_MPS = 350;
 // long before where the previous one ended, to pick up positions stored since.
 const POSITION_SETTLE_MS = 40_000;
 
-// Polls `GET /aircraft` into `feed` every POLL_INTERVAL_MS, for the area set with the returned
+// Polls `GET /api/aircraft` into `feed` every POLL_INTERVAL_MS, for the area set with the returned
 // `setBounds`. Nothing is polled until it is set. Each poll fetches positions up to now. The first
 // poll for an area fetches the feed's whole history, and later polls fetch from POSITION_SETTLE_MS
 // before where the previous one ended.

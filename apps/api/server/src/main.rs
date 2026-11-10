@@ -23,7 +23,7 @@ use tracing_subscriber::EnvFilter;
 
 use crate::clock::Clock;
 
-const BIND_ADDR: &str = "127.0.0.1:3000";
+const DEFAULT_BIND_ADDR: &str = "127.0.0.1:3000";
 
 #[derive(Clone)]
 struct AppState {
@@ -69,24 +69,27 @@ async fn main() -> anyhow::Result<()> {
         },
         ..OpenApi::default()
     };
-    let app = ApiRouter::new()
+    let routes = ApiRouter::new()
         .api_route("/health", get_with(health, health_docs))
         .api_route("/aircraft", get_with(aircraft::list, aircraft::list_docs))
         .route("/openapi.json", get(openapi_json))
         .route(
             "/docs",
-            Scalar::new("/openapi.json")
+            Scalar::new("/api/openapi.json")
                 .with_title("controltower API")
                 .axum_route(),
-        )
+        );
+    let app = ApiRouter::new()
+        .nest("/api", routes)
         .finish_api(&mut api)
         .layer(Extension(Arc::new(api)))
         .with_state(AppState { pool, clock });
 
-    let listener = tokio::net::TcpListener::bind(BIND_ADDR)
+    let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| DEFAULT_BIND_ADDR.into());
+    let listener = tokio::net::TcpListener::bind(&bind_addr)
         .await
-        .with_context(|| format!("binding {BIND_ADDR}"))?;
-    tracing::info!("listening on {BIND_ADDR}");
+        .with_context(|| format!("binding {bind_addr}"))?;
+    tracing::info!("listening on {bind_addr}");
     axum::serve(listener, app)
         .with_graceful_shutdown(async {
             tokio::signal::ctrl_c().await.ok();

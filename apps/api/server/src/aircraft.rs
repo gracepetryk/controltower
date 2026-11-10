@@ -14,8 +14,8 @@ use crate::{
     store::{self, Aircraft, BoundingBox},
 };
 
-/// The longest time span a client can request.
-const MAX_SPAN: TimeDelta = TimeDelta::hours(1);
+/// The longest time span a client can request, since the API is public.
+const MAX_SPAN: TimeDelta = TimeDelta::minutes(5);
 
 #[derive(Deserialize, JsonSchema)]
 pub struct Params {
@@ -27,11 +27,11 @@ pub struct Params {
     /// Start of the time span, inclusive, in seconds since the Unix epoch.
     since: i64,
     /// End of the time span, exclusive, in seconds since the Unix epoch. At
-    /// most an hour after `since`.
+    /// most 5 minutes after `since`.
     until: i64,
 }
 
-/// `GET /aircraft?bbox=west,south,east,north&since=S&until=S`
+/// `GET /api/aircraft?bbox=west,south,east,north&since=S&until=S`
 pub async fn list(
     State(pool): State<PgPool>,
     State(clock): State<Clock>,
@@ -128,19 +128,19 @@ mod tests {
 
     #[test]
     fn accepts_antimeridian_crossing() {
-        assert!(parse_bbox("170,-10,-170,10").is_ok());
+        assert!(parse_bbox("175,-5,-175,5").is_ok());
     }
 
     #[test]
-    fn accepts_span_up_to_an_hour() {
+    fn accepts_span_up_to_max() {
         assert!(parse_span(0, 0).is_ok());
-        assert!(parse_span(1, 3_601).is_ok());
+        assert!(parse_span(1, 301).is_ok());
     }
 
     #[test]
     fn rejects_invalid_span() {
         assert!(parse_span(2, 1).is_err());
-        assert!(parse_span(0, 3_601).is_err());
+        assert!(parse_span(0, 301).is_err());
         assert!(parse_span(i64::MAX, i64::MAX).is_err());
     }
 

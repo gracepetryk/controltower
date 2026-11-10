@@ -1,4 +1,4 @@
-// Client for the controltower API's `GET /aircraft`, served under /api by the dev server's proxy.
+// Client for the controltower API's `GET /api/aircraft`, reached through the Vite proxy or Caddy.
 
 import { METERS_PER_DEGREE, metersPerDegreeLng, wrapLongitude } from './geo';
 
@@ -69,7 +69,7 @@ export async function fetchAircraft(
     throw new AreaTooLargeError(await response.text());
   }
   if (!response.ok) {
-    throw new Error(`GET /aircraft failed with ${response.status}: ${await response.text()}`);
+    throw new Error(`GET /api/aircraft failed with ${response.status}: ${await response.text()}`);
   }
   return response.json();
 }

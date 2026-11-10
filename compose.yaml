@@ -1,0 +1,74 @@
+services:
+  db:
+    image: postgis/postgis:17-3.5
+    # postgis/postgis has no arm64 image.
+    platform: linux/amd64
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: controltower
+      POSTGRES_PASSWORD: ${PG_PASSWORD:?set PG_PASSWORD in .env}
+      POSTGRES_DB: controltower
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - db:/var/lib/postgresql/data
+    # db-host only exists so the host can reach the published port.
+    networks: [internal, db-host]
+
+  server:
+    build:
+      context: apps/api
+      dockerfile: server/Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://controltower:${PG_PASSWORD}@db:5432/controltower
+      REPLAY_DATE: "2026-10-10"
+    depends_on:
+      - db
+    networks: [internal]
+
+  # Copies the frontend build into the web volume, then exits.
+  web:
+    build:
+      context: apps/web
+      args:
+        VITE_MAPBOX_ACCESS_TOKEN: ${VITE_MAPBOX_ACCESS_TOKEN:?set VITE_MAPBOX_ACCESS_TOKEN in .env}
+    volumes:
+      - web:/srv
+    network_mode: none
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - web:/srv:ro
+    depends_on:
+      server:
+        condition: service_started
+      web:
+        condition: service_completed_successfully
+    networks: [internal]
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate run
+    restart: unless-stopped
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?set TUNNEL_TOKEN in .env}
+    depends_on:
+      - caddy
+    networks: [internal, internet]
+
+networks:
+  # No route to the internet, and no host address, so containers can't reach the host either.
+  internal:
+    internal: true
+    driver_opts:
+      com.docker.network.bridge.inhibit_ipv4: "true"
+  internet:
+  db-host:
+
+volumes:
+  db:
+  web:

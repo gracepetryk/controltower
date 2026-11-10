@@ -2,3 +2,12 @@
   height: 100%;
   width: 100%;
 }
+
+.github-ctrl {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 29px;
+  height: 29px;
+  color: #333;
+}
