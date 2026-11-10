@@ -44,11 +44,8 @@ export class AircraftTrack {
     if (next === -1) {
       next = points.length;
     }
-    if (next === 0) {
-      trailPoints.push(points[0]);
-      fades.push(0);
-      next = 1;
-    } else if (next < points.length) {
+    // `startMs` is at or after the oldest point, so `next` is at least 1.
+    if (next < points.length) {
       const t = (startMs - timesMs[next - 1]) / (timesMs[next] - timesMs[next - 1]);
       trailPoints.push(points[next - 1].clone().lerp(points[next], t));
       fades.push(0);
