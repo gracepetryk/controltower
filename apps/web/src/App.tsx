@@ -6,6 +6,7 @@ import './App.css'
 import { AircraftFeed } from './flight/AircraftFeed'
 import { AircraftLayer } from './flight/AircraftLayer'
 import { MapTerrain } from './flight/MapTerrain'
+import { ServerClock } from './flight/ServerClock'
 import { GitHubControl } from './GitHubControl'
 import type { BoundingBox } from './flight/aircraftApi'
 import { METERS_PER_DEGREE, metersPerDegreeLng, wrapLongitude } from './flight/geo'
@@ -62,6 +63,7 @@ function App() {
         // The trail behind each aircraft as it is drawn, `DISPLAY_DELAY_MS` ago.
         historyMs: TRAIL_MS + DISPLAY_DELAY_MS,
         ground: terrain,
+        clock: new ServerClock(),
       }),
   )
   const { setBounds, setPaused } = useAircraftPolling(feed)

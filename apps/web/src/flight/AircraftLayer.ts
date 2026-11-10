@@ -20,7 +20,7 @@ const UP = new THREE.Vector3(0, 0, 1);
 interface AircraftLayerOptions {
   // Where the aircraft come from. Read on every render.
   feed: AircraftFeed;
-  // Aircraft are drawn this far behind the feed's server clock.
+  // Aircraft are drawn this far behind the feed's clock.
   delayMs: number;
   // How far back each trail reaches.
   trailMs: number;
@@ -161,7 +161,7 @@ export class AircraftLayer implements mapboxgl.CustomLayerInterface {
   // Aircraft beyond `maxAircraft` are skipped.
   private syncWithFeed() {
     this.updateTracks();
-    const timeMs = Date.now() - this.delayMs;
+    const timeMs = this.feed.clock.now() - this.delayMs;
     const positions = new Map<string, FlightPosition>();
     for (const [address, track] of this.tracks) {
       const position = track.positionAt(timeMs);
@@ -183,7 +183,7 @@ export class AircraftLayer implements mapboxgl.CustomLayerInterface {
         }
         continue;
       }
-      const { points, fades } = this.tracks.get(address)!.trailAt(timeMs!, this.trailMs, this);
+      const { points, fades } = this.tracks.get(address)!.trailAt(timeMs, this.trailMs, this);
       this.setAircraft(address, position, points, fades);
     }
   }

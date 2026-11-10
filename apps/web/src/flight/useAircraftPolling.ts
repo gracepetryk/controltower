@@ -18,13 +18,15 @@ const MAX_GROUND_SPEED_MPS = 350;
 const POSITION_SETTLE_MS = 40_000;
 
 // Polls `GET /api/aircraft` into `feed` every POLL_INTERVAL_MS, for the area set with the returned
-// `setBounds`. Nothing is polled until it is set. Each poll fetches positions up to now. The first
+// `setBounds`. Nothing is polled until it is set. Each poll fetches positions up to now on the
+// feed's clock. The first
 // poll for an area fetches the feed's whole history, and later polls fetch from POSITION_SETTLE_MS
 // before where the previous one ended.
 // A new area cancels the request in flight and polls right away. `setPaused(true)` stops polling
 // and cancels the request in flight, and `setPaused(false)` polls right away. Polling also pauses
 // while the page is hidden and polls right away when it is shown again, so trails cover the time
-// away with recorded positions. When the server refuses the area as too large, `feed` is cleared and
+// away with recorded positions. A failed poll is retried on the next tick, and the aircraft that
+// have aged out of the feed's history are dropped. When the server refuses the area as too large, `feed` is cleared and
 // polling stops until the area changes.
 export function useAircraftPolling(feed: AircraftFeed) {
   const [bounds, setBounds] = useState<BoundingBox | null>(null);
@@ -52,13 +54,13 @@ export function useAircraftPolling(feed: AircraftFeed) {
       }
       polling = true;
       try {
-        const until = Math.floor(Date.now() / 1000) + 1;
+        const until = Math.floor(feed.clock.now() / 1000) + 1;
         const oldest = until - historySeconds;
         // Fetches the whole history for the first poll, after the page was hidden for longer than
         // the history, and if the clock went back.
         const full = fetchedUntil === null || fetchedUntil < oldest || fetchedUntil > until;
         const since = full ? oldest : Math.max(oldest, fetchedUntil! - POSITION_SETTLE_MS / 1000);
-        const aircraft = await fetchAircraft(area, since, until, controller.signal);
+        const aircraft = await fetchAircraft(area, since, until, feed.clock, controller.signal);
         // Replaced by a newer effect while the response was read.
         if (controller.signal.aborted) {
           return;
@@ -79,6 +81,8 @@ export function useAircraftPolling(feed: AircraftFeed) {
           return;
         }
         console.error('Polling aircraft failed; retrying', error);
+        // Without new positions, aircraft still age out of the feed instead of staying frozen.
+        feed.prune();
       } finally {
         polling = false;
       }

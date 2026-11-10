@@ -1,5 +1,6 @@
 import type { ApiAircraft } from './aircraftApi';
 import { type TimedPosition, toTimedPositions, withGroundClamping } from './flightTrace';
+import type { ServerClock } from './ServerClock';
 
 // The most positions kept per aircraft. Enough for `historyMs` of positions about a second apart,
 // the densest that recorded traces have.
@@ -23,12 +24,15 @@ interface AircraftFeedOptions {
   // How far back from now positions are needed.
   historyMs: number;
   ground: Ground;
+  // The clock that "now" is measured on.
+  clock: ServerClock;
 }
 
 // Holds the aircraft from `GET /api/aircraft` responses: each one's newest MAX_POSITIONS positions,
 // while it has one in the last `historyMs`.
 export class AircraftFeed {
   readonly historyMs: number;
+  readonly clock: ServerClock;
   private readonly ground: Ground;
   // Each aircraft's positions, oldest first, by address. Every change replaces the map, and the
   // arrays of aircraft whose positions changed; they are never changed in place.
@@ -38,8 +42,9 @@ export class AircraftFeed {
   // its first response, or after it's cleared, leaves no listener behind.
   private unsubscribeGround: (() => void) | null = null;
 
-  constructor({ historyMs, ground }: AircraftFeedOptions) {
+  constructor({ historyMs, ground, clock }: AircraftFeedOptions) {
     this.historyMs = historyMs;
+    this.clock = clock;
     this.ground = ground;
   }
 
@@ -62,13 +67,16 @@ export class AircraftFeed {
         traces.set(address, [...positions, ...added].slice(-MAX_POSITIONS));
       }
     }
-    const oldestMs = Date.now() - this.historyMs;
-    for (const [address, positions] of traces) {
-      if (positions[positions.length - 1].timeMs < oldestMs) {
-        traces.delete(address);
-      }
-    }
+    this.dropStale(traces);
     this.setTraces(traces);
+  }
+
+  // Drops the aircraft with no position in the last `historyMs`.
+  prune() {
+    const traces = new Map(this.traces);
+    if (this.dropStale(traces)) {
+      this.setTraces(traces);
+    }
   }
 
   clear() {
@@ -84,6 +92,20 @@ export class AircraftFeed {
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  // Deletes the aircraft in `traces` with no position in the last `historyMs`. Returns whether it
+  // deleted any.
+  private dropStale(traces: Map<string, readonly TimedPosition[]>): boolean {
+    const oldestMs = this.clock.now() - this.historyMs;
+    let dropped = false;
+    for (const [address, positions] of traces) {
+      if (positions[positions.length - 1].timeMs < oldestMs) {
+        traces.delete(address);
+        dropped = true;
+      }
+    }
+    return dropped;
   }
 
   private setTraces(traces: Map<string, readonly TimedPosition[]>) {

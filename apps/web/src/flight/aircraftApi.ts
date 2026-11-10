@@ -1,6 +1,7 @@
 // Client for the controltower API's `GET /api/aircraft`, reached through the Vite proxy or Caddy.
 
 import { METERS_PER_DEGREE, metersPerDegreeLng, wrapLongitude } from './geo';
+import type { ServerClock } from './ServerClock';
 
 export interface TracePoint {
   // Milliseconds since the Unix epoch.
@@ -52,11 +53,12 @@ export function padBoundingBox(bbox: BoundingBox, meters: number): BoundingBox {
 export class AreaTooLargeError extends Error {}
 
 // Fetches the positions observed in `[sinceSeconds, untilSeconds)` inside `bbox`, grouped by
-// aircraft. Times are seconds since the Unix epoch.
+// aircraft. Times are seconds since the Unix epoch. Every response, including errors, syncs `clock`.
 export async function fetchAircraft(
   bbox: BoundingBox,
   sinceSeconds: number,
   untilSeconds: number,
+  clock: ServerClock,
   signal?: AbortSignal,
 ): Promise<ApiAircraft[]> {
   const params = new URLSearchParams({
@@ -64,7 +66,9 @@ export async function fetchAircraft(
     since: String(sinceSeconds),
     until: String(untilSeconds),
   });
+  const requestedMs = Date.now();
   const response = await fetch(`/api/aircraft?${params}`, { signal });
+  clock.sync(response, requestedMs, Date.now());
   if (response.status === 413) {
     throw new AreaTooLargeError(await response.text());
   }
