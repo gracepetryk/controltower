@@ -9,7 +9,7 @@ services:
       POSTGRES_PASSWORD: ${PG_PASSWORD:?set PG_PASSWORD in .env}
       POSTGRES_DB: controltower
     ports:
-      - "127.0.0.1:5433:5432"
+      - "5433:5432"
     volumes:
       - db:/var/lib/postgresql/data
     # db-host only exists so the host can reach the published port.
