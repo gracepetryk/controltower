@@ -1,0 +1,16 @@
+[Unit]
+Description=Import yesterday's adsb.lol globe history and replay it
+# Retry hourly while the release isn't published yet, for up to 6 attempts.
+StartLimitIntervalSec=12h
+StartLimitBurst=6
+
+[Service]
+Type=oneshot
+ExecStart=%h/code/controltower/scripts/import-globe-history.sh
+Environment=PATH=%h/.cargo/bin:/usr/local/bin:/usr/bin:/bin
+Environment=DOCKER_HOST=unix://%t/docker.sock
+Restart=on-failure
+RestartSec=1h
+Nice=19
+CPUSchedulingPolicy=idle
+IOSchedulingClass=idle

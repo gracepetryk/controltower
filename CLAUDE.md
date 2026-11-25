@@ -22,6 +22,10 @@ Run these from `apps/api`:
 
 - `cargo run -p ingest`: run migrations, then poll every 10 seconds
 - `cargo run --release -p ingest -- import <dir>`: run migrations, then load the positions in a day of adsb.lol globe history from `<dir>` that are within `RADIUS_NM` of the center
+
+Run from the repo root:
+
+- `scripts/import-globe-history.sh [YYYY-MM-DD]`: download a day of globe history (default: yesterday, UTC), import it, write `REPLAY_DATE` to `.env.replay` and recreate the compose server. `deploy/systemd/controltower-import.{service,timer}` run it at 05:00 UTC as a systemd user timer, retrying hourly until the release is published. The timer isn't `Persistent`, so missed nights aren't run at boot.
 - `cargo run -p controltower-server`: serve on `127.0.0.1:3000`, or `BIND_ADDR` if set
 - `cargo clippy --workspace`: lint. Run before committing.
 
@@ -64,7 +68,7 @@ The crates share no code. Postgres is the only interface between them, and `inge
 
 ### Deployment
 
-- `compose.yaml` at the repo root runs `db`, `server` (`apps/api/server/Dockerfile`), `web`, `caddy` and `cloudflared`. They share the `internal` network, which has no route out and, with `inhibit_ipv4`, no host address, so its containers can't reach the host's services either. Only `cloudflared` is also on `internet`. `db` is also on `db-host`, because Docker only publishes ports from containers on a non-internal network, and `ingest` reaches it from the host on 5433. It sets the server's `REPLAY_DATE` to 2026-10-10. The `web` image (`apps/web/Dockerfile`) builds the frontend, with `VITE_MAPBOX_ACCESS_TOKEN` as a build arg. The `web` service has no network; it replaces the contents of the `web` volume with the build and exits. `caddy` runs the stock `caddy:2-alpine` image once `web` has finished, with the `web` volume mounted read-only on `/srv` and the root `Caddyfile` mounted into it, so upgrading Caddy doesn't rebuild the frontend. `ingest` isn't containerized.
+- `compose.yaml` at the repo root runs `db`, `server` (`apps/api/server/Dockerfile`), `web`, `caddy` and `cloudflared`. They share the `internal` network, which has no route out and, with `inhibit_ipv4`, no host address, so its containers can't reach the host's services either. Only `cloudflared` is also on `internet`. `db` is also on `db-host`, because Docker only publishes ports from containers on a non-internal network, and `ingest` reaches it from the host on 5433. The server reads `REPLAY_DATE` from the gitignored `.env.replay`, if it exists. The `web` image (`apps/web/Dockerfile`) builds the frontend, with `VITE_MAPBOX_ACCESS_TOKEN` as a build arg. The `web` service has no network; it replaces the contents of the `web` volume with the build and exits. `caddy` runs the stock `caddy:2-alpine` image once `web` has finished, with the `web` volume mounted read-only on `/srv` and the root `Caddyfile` mounted into it, so upgrading Caddy doesn't rebuild the frontend. `ingest` isn't containerized.
 - Caddy listens on plain HTTP on `:8080` and isn't published on the host, so the tunnel is the only way in. TLS is terminated by the Cloudflare tunnel that `cloudflared` runs with `TUNNEL_TOKEN`. The tunnel is configured in the Cloudflare dashboard, with its public hostname pointing at `http://caddy:8080`. `/api` and `/api/*` are proxied to the server unchanged, the same as the Vite proxy. Everything else is the frontend, with `/assets/*` cached as immutable.
 
 ## Gotchas

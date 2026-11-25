@@ -46,6 +46,15 @@ REPLAY_DATE=2026-10-10 cargo run -p controltower-server
 
 Don't run the poller while replaying: it deletes positions older than a day.
 
+`scripts/import-globe-history.sh [YYYY-MM-DD]` downloads a day of globe history (default: yesterday, UTC), imports it, writes `REPLAY_DATE` to `.env.replay` and restarts the compose server. To run it nightly as a systemd user timer:
+
+```sh
+systemctl --user link $PWD/deploy/systemd/controltower-import.{service,timer}
+systemctl --user enable --now controltower-import.timer
+```
+
+The timer runs at 05:00 UTC, after adsb.lol publishes the previous day, and retries hourly if the release isn't out yet. It doesn't catch up on nights the machine was off. Imported days are never deleted.
+
 To run the frontend and server in Docker behind Caddy, from the repo root:
 
 ```sh
@@ -55,7 +64,7 @@ docker compose up -d --build
 
 Caddy serves the frontend on `/` and the API on `/api` over plain HTTP. It isn't published on the host: `cloudflared` connects it to a [Cloudflare tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/), which terminates TLS. Create a remotely-managed tunnel in the Cloudflare dashboard, point its public hostname at `http://caddy:8080`, and put its token in `TUNNEL_TOKEN`.
 
-The server in `compose.yaml` replays 2026-10-10, so import that day first as above, and don't run the poller. To show live traffic instead, remove `REPLAY_DATE` from `compose.yaml` and run the poller on the host:
+The server in `compose.yaml` replays the day in `REPLAY_DATE` in `.env.replay`, which the import script writes, and don't run the poller. To show live traffic instead, delete `.env.replay` and run the poller on the host:
 
 ```sh
 docker compose up -d server

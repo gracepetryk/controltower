@@ -22,7 +22,10 @@ services:
     restart: unless-stopped
     environment:
       DATABASE_URL: postgres://controltower:${PG_PASSWORD}@db:5432/controltower
-      REPLAY_DATE: "2026-10-10"
+    # Sets REPLAY_DATE. Written by scripts/import-globe-history.sh.
+    env_file:
+      - path: .env.replay
+        required: false
     depends_on:
       - db
     networks: [internal]
