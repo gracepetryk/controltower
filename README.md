@@ -53,7 +53,15 @@ systemctl --user link $PWD/deploy/systemd/controltower-import.{service,timer}
 systemctl --user enable --now controltower-import.timer
 ```
 
-The timer runs at 05:00 UTC, after adsb.lol publishes the previous day, and retries hourly if the release isn't out yet. It doesn't catch up on nights the machine was off. Imported days are never deleted.
+To run it at another time, override the timer locally with `systemctl --user edit controltower-import.timer`:
+
+```ini
+[Timer]
+OnCalendar=
+OnCalendar=*-*-* 03:00:00
+```
+
+By default the timer runs at 02:00 local time, after adsb.lol publishes the previous day, and retries hourly if the release isn't out yet. It doesn't catch up on nights the machine was off. Imported days are never deleted.
 
 To run the frontend and server in Docker behind Caddy, from the repo root:
 

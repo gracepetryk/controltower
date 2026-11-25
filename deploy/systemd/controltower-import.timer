@@ -2,9 +2,12 @@
 Description=Nightly adsb.lol globe history import
 
 [Timer]
-# adsb.lol publishes the previous day's release around 03:30 UTC. Not
-# Persistent, so a run missed while the machine was off isn't made up at boot.
-OnCalendar=*-*-* 05:00:00 UTC
+# Default; override locally with `systemctl --user edit controltower-import.timer`.
+# Local time, in the gap between the host's other nightly jobs. adsb.lol
+# publishes the previous UTC day's release around 03:30 UTC, well before this.
+# Not Persistent, so a run missed while the machine was off isn't made up at
+# boot.
+OnCalendar=*-*-* 02:00:00
 
 [Install]
 WantedBy=timers.target

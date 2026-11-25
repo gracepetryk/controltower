@@ -25,7 +25,7 @@ Run these from `apps/api`:
 
 Run from the repo root:
 
-- `scripts/import-globe-history.sh [YYYY-MM-DD]`: download a day of globe history (default: yesterday, UTC), import it, write `REPLAY_DATE` to `.env.replay` and recreate the compose server. `deploy/systemd/controltower-import.{service,timer}` run it at 05:00 UTC as a systemd user timer, retrying hourly until the release is published. The timer isn't `Persistent`, so missed nights aren't run at boot.
+- `scripts/import-globe-history.sh [YYYY-MM-DD]`: download a day of globe history (default: yesterday, UTC), import it, write `REPLAY_DATE` to `.env.replay` and recreate the compose server. `deploy/systemd/controltower-import.{service,timer}` run it as a systemd user timer, by default at 02:00 local time (override `OnCalendar` locally with `systemctl --user edit controltower-import.timer`), retrying hourly until the release is published. The timer isn't `Persistent`, so missed nights aren't run at boot.
 - `cargo run -p controltower-server`: serve on `127.0.0.1:3000`, or `BIND_ADDR` if set
 - `cargo clippy --workspace`: lint. Run before committing.
 
